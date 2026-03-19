@@ -7,7 +7,6 @@ import os
 
 st.set_page_config(page_title="출고 이력 검색", layout="wide")
 
-# 목록용 유니크 정렬(문자열 통일 + 빈값/0/NAN 제거)
 def sorted_unique(series):
     if series is None:
         return []
@@ -28,11 +27,11 @@ def load_excel(file_bytes):
                 st.stop()
             return pd.DataFrame()
 
-    rec  = read_sheet("출고기록")
+    rec   = read_sheet("출고기록")
     alias = read_sheet("별칭맵핑")
-    prod = read_sheet("품목마스터", required=False)
-    adh  = read_sheet("점착제마스터", required=False)
-    cust = read_sheet("거래처마스터", required=False)
+    prod  = read_sheet("품목마스터", required=False)
+    adh   = read_sheet("점착제마스터", required=False)
+    cust  = read_sheet("거래처마스터", required=False)
 
     if rec.empty:
         st.error("출고기록 시트가 비어있습니다.")
@@ -72,7 +71,6 @@ def load_excel(file_bytes):
         df = df[df["유형"] == typ].dropna(subset=["별칭", "공식코드"])
         alias_list = df["별칭"].astype(str).str.strip().tolist()
         code_list  = df["공식코드"].astype(str).str.strip().tolist()
-
         out = []
         vals = series.astype(str).fillna("").str.strip()
         for v in vals:
@@ -116,6 +114,7 @@ def load_excel(file_bytes):
             on="점착제코드", how="left"
         )
 
+    # ✅ [수정] 최근단가 + 최근날짜 함께 추출
     tmp = rec.copy()
     tmp["_거래처s"] = tmp["거래처"].astype(str).fillna("")
     tmp["_품목s"]  = tmp["품목코드"].astype(str).fillna("")
@@ -123,13 +122,25 @@ def load_excel(file_bytes):
     if "날짜" in tmp.columns:
         sort_cols.append("날짜")
     tmp = tmp.sort_values(sort_cols, kind="mergesort")
+
     if "단가(원/M2)" in tmp.columns:
-        last_price = (
+        _tail = (
             tmp.dropna(subset=["단가(원/M2)"])
-              .groupby(["거래처", "품목코드"], as_index=False, dropna=False)
-              .tail(1)[["거래처", "품목코드", "단가(원/M2)"]]
-              .rename(columns={"단가(원/M2)": "최근단가"})
+               .groupby(["거래처", "품목코드"], as_index=False, dropna=False)
+               .tail(1)
         )
+        _extract_cols = ["거래처", "품목코드", "단가(원/M2)"]
+        _rename_map   = {"단가(원/M2)": "최근단가"}
+        if "날짜" in _tail.columns:
+            _extract_cols.append("날짜")
+            _rename_map["날짜"] = "최근날짜"
+        last_price = _tail[_extract_cols].rename(columns=_rename_map)
+        # 날짜 → YYYY-MM-DD 문자열 포맷
+        if "최근날짜" in last_price.columns:
+            last_price["최근날짜"] = (
+                pd.to_datetime(last_price["최근날짜"], errors="coerce")
+                  .dt.strftime("%Y-%m-%d")
+            )
         rec = rec.merge(last_price, on=["거래처", "품목코드"], how="left")
 
     def join_unique(s):
@@ -157,8 +168,7 @@ def load_excel(file_bytes):
 
 
 # -------------------------------------------------------
-# ✅ [수정] 기본 파일 자동 로드 + 수동 업로드 병행
-# GitHub 레포에 올린 엑셀 파일명으로 변경하세요
+# 기본 파일 자동 로드
 DEFAULT_FILE = "data.xlsx"
 # -------------------------------------------------------
 
@@ -169,7 +179,6 @@ uploaded = st.file_uploader(
     type=["xlsx"]
 )
 
-# ✅ [수정] 파일 소스 결정 로직
 if uploaded:
     file_bytes = uploaded.getvalue()
     st.success("✅ 업로드한 파일을 사용합니다.")
@@ -180,7 +189,6 @@ elif os.path.exists(DEFAULT_FILE):
 else:
     st.info("템플릿에 데이터 입력 후 업로드하거나, GitHub 레포에 data.xlsx를 추가하세요.")
     st.stop()
-# -------------------------------------------------------
 
 rec, alias, prod, adh, cust = load_excel(file_bytes)
 
@@ -223,7 +231,9 @@ with tab1:
             if c in q.columns:
                 q[c] = q[c].astype(str)
 
-        cols = ["거래처","품목코드","품목명(공식)","점착제코드","점착제명","가로폭이력","최근단가"]
+        # ✅ [수정] 최근날짜를 최근단가 앞에 추가
+        cols = ["거래처","품목코드","품목명(공식)","점착제코드","점착제명",
+                "가로폭이력","최근날짜","최근단가"]
         use_cols = [c for c in cols if c in q.columns]
         grp = (
             q.groupby(use_cols, dropna=False)
@@ -232,7 +242,11 @@ with tab1:
                   매출액=("금액(원)", "sum"))
              .reset_index()
         )
-        grp["가중평균단가"] = np.where(grp["총량_M2"] > 0, (grp["매출액"] / grp["총량_M2"]).round(0), np.nan)
+        grp["가중평균단가"] = np.where(
+            grp["총량_M2"] > 0,
+            (grp["매출액"] / grp["총량_M2"]).round(0),
+            np.nan
+        )
         sort_cols = [c for c in ["거래처","품목코드"] if c in grp.columns]
         st.dataframe(grp.sort_values(sort_cols) if sort_cols else grp)
 
@@ -245,7 +259,8 @@ with tab2:
             if c in q.columns:
                 q[c] = q[c].astype(str)
 
-        cols = ["품목코드","품목명(공식)","거래처"]
+        # ✅ [수정] 최근날짜, 최근단가 추가
+        cols = ["품목코드","품목명(공식)","거래처","최근날짜","최근단가"]
         use_cols = [c for c in cols if c in q.columns]
         grp2 = (
             q.groupby(use_cols, dropna=False)
@@ -254,7 +269,11 @@ with tab2:
                   매출액=("금액(원)", "sum"))
              .reset_index()
         )
-        grp2["가중평균단가"] = np.where(grp2["총량_M2"] > 0, (grp2["매출액"] / grp2["총량_M2"]).round(0), np.nan)
+        grp2["가중평균단가"] = np.where(
+            grp2["총량_M2"] > 0,
+            (grp2["매출액"] / grp2["총량_M2"]).round(0),
+            np.nan
+        )
         sort_cols = [c for c in ["품목코드","거래처"] if c in grp2.columns]
         st.dataframe(grp2.sort_values(sort_cols) if sort_cols else grp2)
 
