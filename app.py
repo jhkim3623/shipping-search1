@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 from datetime import datetime
+import os
 
 st.set_page_config(page_title="출고 이력 검색", layout="wide")
 
@@ -37,20 +38,16 @@ def load_excel(file_bytes):
         st.error("출고기록 시트가 비어있습니다.")
         st.stop()
 
-    # 날짜/숫자 정리
     if "날짜" in rec.columns:
         rec["날짜"] = pd.to_datetime(rec["날짜"], errors="coerce")
 
-    # 숫자 컬럼 캐스팅
     for c in ["가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)"]:
         if c in rec.columns:
             rec[c] = pd.to_numeric(rec[c], errors="coerce")
 
-    # 금액(원) 자동 계산
     if "금액(원)" not in rec.columns and {"수량(M2)", "단가(원/M2)"} <= set(rec.columns):
         rec["금액(원)"] = (rec["수량(M2)"] * rec["단가(원/M2)"]).round(0)
 
-    # 코드/텍스트 정규화(혼합 타입/0/빈값 처리)
     def normalize_code_col(df, col):
         if col in df.columns:
             s = df[col].astype(str).str.strip()
@@ -65,7 +62,6 @@ def load_excel(file_bytes):
         normalize_code_col(rec, c)
     normalize_code_col(rec, "거래처")
 
-    # 별칭 매핑 함수(정확일치 우선, 부분일치 보조)
     def map_by_alias(series, alias_df, typ):
         if alias_df is None or alias_df.empty or series is None:
             return pd.Series([None] * len(series))
@@ -81,12 +77,10 @@ def load_excel(file_bytes):
         vals = series.astype(str).fillna("").str.strip()
         for v in vals:
             mapped = None
-            # 정확 일치
             for a, c in zip(alias_list, code_list):
                 if v == a:
                     mapped = c
                     break
-            # 부분 일치
             if mapped is None:
                 for a, c in zip(alias_list, code_list):
                     if a and a in v:
@@ -95,7 +89,6 @@ def load_excel(file_bytes):
             out.append(mapped)
         return pd.Series(out)
 
-    # 공식코드 자동 보정(별칭 → 공식)
     if "품목코드" not in rec.columns or rec["품목코드"].isna().any():
         if "품목코드" not in rec.columns:
             rec["품목코드"] = pd.NA
@@ -109,11 +102,9 @@ def load_excel(file_bytes):
             fill = map_by_alias(rec["점착제_고객표현"], alias, "점착제")
             rec["점착제코드"] = rec["점착제코드"].fillna(fill)
 
-    # 재정규화(별칭 매핑 후 '0', 'nan' 등 제거)
     for c in ["품목코드", "점착제코드"]:
         normalize_code_col(rec, c)
 
-    # 마스터명 매핑
     if not prod.empty and {"품목코드", "품목명(공식)"} <= set(prod.columns):
         rec = rec.merge(
             prod[["품목코드", "품목명(공식)", "품목비고"]].drop_duplicates(),
@@ -125,7 +116,6 @@ def load_excel(file_bytes):
             on="점착제코드", how="left"
         )
 
-    # 최근단가(거래처+품목) 계산 - 정렬 키 분리로 타입 충돌 방지
     tmp = rec.copy()
     tmp["_거래처s"] = tmp["거래처"].astype(str).fillna("")
     tmp["_품목s"]  = tmp["품목코드"].astype(str).fillna("")
@@ -142,7 +132,6 @@ def load_excel(file_bytes):
         )
         rec = rec.merge(last_price, on=["거래처", "품목코드"], how="left")
 
-    # 가로폭 이력(거래처+품목)
     def join_unique(s):
         vals = []
         for x in pd.unique(s.dropna()):
@@ -167,13 +156,33 @@ def load_excel(file_bytes):
     return rec, alias, prod, adh, cust
 
 
-st.title("출고 이력 검색(거래처/품목/가로폭/점착제)")
-uploaded = st.file_uploader("엑셀 파일(.xlsx) 업로드: '출고기록', '별칭맵핑' 시트 필수", type=["xlsx"])
-if not uploaded:
-    st.info("템플릿에 데이터 입력 후 업로드하면 웹에서 즉시 검색할 수 있어요.")
-    st.stop()
+# -------------------------------------------------------
+# ✅ [수정] 기본 파일 자동 로드 + 수동 업로드 병행
+# GitHub 레포에 올린 엑셀 파일명으로 변경하세요
+DEFAULT_FILE = "data.xlsx"
+# -------------------------------------------------------
 
-rec, alias, prod, adh, cust = load_excel(uploaded.getvalue())
+st.title("출고 이력 검색(거래처/품목/가로폭/점착제)")
+
+uploaded = st.file_uploader(
+    "📂 다른 파일로 조회하려면 업로드 (미업로드 시 기본 데이터 자동 로드)",
+    type=["xlsx"]
+)
+
+# ✅ [수정] 파일 소스 결정 로직
+if uploaded:
+    file_bytes = uploaded.getvalue()
+    st.success("✅ 업로드한 파일을 사용합니다.")
+elif os.path.exists(DEFAULT_FILE):
+    with open(DEFAULT_FILE, "rb") as f:
+        file_bytes = f.read()
+    st.info(f"📌 기본 데이터({DEFAULT_FILE})를 자동으로 불러왔습니다.")
+else:
+    st.info("템플릿에 데이터 입력 후 업로드하거나, GitHub 레포에 data.xlsx를 추가하세요.")
+    st.stop()
+# -------------------------------------------------------
+
+rec, alias, prod, adh, cust = load_excel(file_bytes)
 
 # 사이드바 필터
 st.sidebar.header("검색 필터")
@@ -210,7 +219,6 @@ with tab1:
     if q.empty:
         st.warning("조건에 맞는 데이터가 없습니다.")
     else:
-        # 표시용 정렬 충돌 방지(문자열로 보기)
         for c in ["거래처", "품목코드", "점착제코드"]:
             if c in q.columns:
                 q[c] = q[c].astype(str)
