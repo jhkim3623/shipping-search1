@@ -118,8 +118,6 @@ def load_excel(file_bytes):
     else: rec["가로폭이력"] = pd.NA
     return rec, alias, prod, adh, cust
 
-
-# ── 파일 로드 ──────────────────────────────────────────
 DEFAULT_FILE = "data.xlsx"
 st.title("출고 이력 검색(거래처/품목/가로폭/점착제)")
 uploaded = st.file_uploader("📂 다른 파일 업로드 (미업로드 시 기본 데이터 자동 로드)", type=["xlsx"])
@@ -134,7 +132,6 @@ else:
 
 rec, alias, prod, adh, cust = load_excel(file_bytes)
 
-# ── 사이드바 필터 ──────────────────────────────────────
 st.sidebar.header("검색 필터")
 sel_cust = st.sidebar.multiselect("거래처",    sorted_unique(rec.get("거래처",   pd.Series())))
 sel_prod = st.sidebar.multiselect("품목코드",  sorted_unique(rec.get("품목코드", pd.Series())))
@@ -156,10 +153,8 @@ if sel_adh:  q = q[q["점착제코드"].astype(str).isin(sel_adh)]
 if sdate and edate and "날짜" in q.columns:
     q = q[(q["날짜"]>=pd.to_datetime(sdate)) & (q["날짜"]<=pd.to_datetime(edate))]
 
-# ── 탭 ─────────────────────────────────────────────────
 tab1, tab2, tab3, tab4 = st.tabs(["거래처별 검색","품목별 검색","🏷️ 견적 레퍼런스","원자료"])
 
-# ══════════ TAB 1 ══════════
 with tab1:
     st.subheader("거래처별 → 품목별 출고 이력/최근 단가/가로폭")
     if q.empty: st.warning("조건에 맞는 데이터가 없습니다.")
@@ -175,7 +170,6 @@ with tab1:
         sc=[c for c in ["거래처","품목코드"] if c in g.columns]
         st.dataframe(auto_fmt(g.sort_values(sc) if sc else g), use_container_width=True)
 
-# ══════════ TAB 2 ══════════
 with tab2:
     st.subheader("품목별 → 거래처별 출고 이력/총량/단가/매출")
     if q.empty: st.warning("조건에 맞는 데이터가 없습니다.")
@@ -191,29 +185,22 @@ with tab2:
         sc=[c for c in ["품목코드","거래처"] if c in g2.columns]
         st.dataframe(auto_fmt(g2.sort_values(sc) if sc else g2), use_container_width=True)
 
-# ══════════ TAB 3 : 견적 레퍼런스 ══════════
 with tab3:
     import plotly.express as px
     import plotly.graph_objects as go
-
     st.subheader("🏷️ 견적 레퍼런스 — 기준 견적가 & 판매 동향")
     st.caption("단가 0 및 샘플 품목 자동 제외 | 소형 하위35% / 중형 중간40% / 대형 상위25% | 복합지표: 월판매수량 60% + 월판매금액 40%")
-
-    # ── 필터 ──
     q_ref = q.copy()
     if "단가(원/M2)" in q_ref.columns:
         q_ref = q_ref[q_ref["단가(원/M2)"].notna() & (q_ref["단가(원/M2)"] > 0)]
     for col in ["품목코드","품목명(공식)"]:
         if col in q_ref.columns:
             q_ref = q_ref[~q_ref[col].astype(str).str.contains("샘플", case=False, na=False)]
-
     if q_ref.empty:
         st.warning("조건에 맞는 데이터가 없습니다.")
     else:
         grp_base = ["품목코드","품목명(공식)","점착제코드","점착제명"]
         GC = [c for c in grp_base if c in q_ref.columns]
-
-        # 월 수
         if "날짜" in q_ref.columns:
             vd = q_ref["날짜"].dropna()
             if len(vd):
@@ -221,8 +208,6 @@ with tab3:
                 n_months = max(1,(d1.year-d0.year)*12+d1.month-d0.month+1)
             else: n_months=1
         else: n_months=1
-
-        # ── ① 제품 개요 집계 ──────────────────────────
         overview = q_ref.groupby(GC, dropna=False).agg(
             최저단가=("단가(원/M2)","min"),
             최고단가=("단가(원/M2)","max"),
@@ -236,7 +221,6 @@ with tab3:
         overview["단가범위(원/M2)"] = overview.apply(
             lambda r: f"{int(r['최저단가']):,} ~ {int(r['최고단가']):,}"
                       if pd.notna(r["최저단가"]) and pd.notna(r["최고단가"]) else "-", axis=1)
-
         st.markdown("#### 📋 제품별 개요")
         ov_show = [c for c in GC+["단가범위(원/M2)","최저단가","최고단가","거래처수",
                                     "월평균판매량_M2","월평균판매액_원","총량_M2","총매출액"]
@@ -244,21 +228,16 @@ with tab3:
         sc=[c for c in ["품목코드","점착제코드"] if c in overview.columns]
         st.dataframe(auto_fmt(overview[ov_show].sort_values(sc) if sc else overview[ov_show]),
                      use_container_width=True)
-
-        # ── ② 거래처별 월지표 + 최근단가 ────────────
         cv = (q_ref.groupby(GC+["거래처"], dropna=False)
                    .agg(c_총량=("수량(M2)","sum"), c_총금액=("금액(원)","sum"))
                    .reset_index())
         cv["c_월수량"] = (cv["c_총량"]/n_months).round(1)
         cv["c_월금액"] = (cv["c_총금액"]/n_months).round(0)
-
         if "날짜" in q_ref.columns and "단가(원/M2)" in q_ref.columns:
             rp = (q_ref.dropna(subset=["단가(원/M2)","날짜"]).sort_values("날짜")
                        .groupby(GC+["거래처"], dropna=False).tail(1)
                        [GC+["거래처","단가(원/M2)"]].rename(columns={"단가(원/M2)":"c_최근단가"}))
             cv = cv.merge(rp, on=GC+["거래처"], how="left")
-
-        # ── ③ 정교한 티어 분류 (복합지표 60:40) ─────
         tier_parts = []
         for keys, grp in cv.groupby(GC, dropna=False):
             grp = grp.dropna(subset=["c_월수량"]).copy()
@@ -273,41 +252,31 @@ with tab3:
                     grp["score"] = 0.6*grp["r_vol"] + 0.4*grp["r_amt"]
                 else:
                     grp["score"] = grp["r_vol"]
-                # 소형≤35%, 중형35~75%, 대형>75%
                 grp["tier"] = grp["score"].apply(
                     lambda s: "소형" if s<=0.35 else ("대형" if s>0.75 else "중형"))
             tier_parts.append(grp)
-
         ct = pd.concat(tier_parts, ignore_index=True) if tier_parts else pd.DataFrame()
-
-        # ── ④ 세로형 기준 견적가 테이블 ─────────────
         if not ct.empty:
             agg_cols = {"업체수":("거래처","count"),
                         "기준수량(M2/월)":("c_월수량","median"),
                         "기준월판매금액(원)":("c_월금액","median")}
             if "c_최근단가" in ct.columns:
                 agg_cols["기준단가(원/M2)"] = ("c_최근단가","median")
-
             tier_agg = ct.groupby(GC+["tier"], dropna=False).agg(**agg_cols).reset_index()
             tier_agg["기준수량(M2/월)"] = tier_agg["기준수량(M2/월)"].round(0)
             if "기준단가(원/M2)" in tier_agg.columns:
                 tier_agg["기준단가(원/M2)"] = tier_agg["기준단가(원/M2)"].round(0)
             if "기준월판매금액(원)" in tier_agg.columns:
                 tier_agg["기준월판매금액(원)"] = tier_agg["기준월판매금액(원)"].round(0)
-
             tier_order = {"소형":1,"중형":2,"대형":3}
             tier_agg["_ord"] = tier_agg["tier"].map(tier_order)
             tier_agg = tier_agg.sort_values(GC+["_ord"]).drop(columns=["_ord"])
             tier_agg = tier_agg.rename(columns={"tier":"구분"})
-
             t_show = [c for c in GC+["구분","업체수","기준수량(M2/월)",
                                        "기준단가(원/M2)","기준월판매금액(원)"]
                       if c in tier_agg.columns]
-
             st.markdown("#### 🏷️ 구분별 기준 견적가 (세로형 — 모바일 최적화)")
             st.dataframe(auto_fmt(tier_agg[t_show]), use_container_width=True, height=400)
-
-            # ── ⑤ 요약 메트릭 (6개) ──────────────────
             st.markdown("---")
             m1,m2,m3,m4,m5,m6 = st.columns(6)
             m1.metric("조회 품목 수", f"{len(overview):,}종")
@@ -320,28 +289,19 @@ with tab3:
                 m5.metric("월평균 판매량", f"{overview['월평균판매량_M2'].sum():,.1f} M²")
             if "월평균판매액_원" in overview.columns:
                 m6.metric("월평균 판매액", f"{overview['월평균판매액_원'].sum():,.0f} 원")
-
-            # ── ⑥ 월별 판매 추이 대시보드 ───────────
             st.markdown("---")
             st.markdown("#### 📊 월별 품목별 판매 추이")
             if "날짜" in q_ref.columns and "금액(원)" in q_ref.columns and "품목코드" in q_ref.columns:
                 cd = q_ref.copy()
                 cd["월"] = cd["날짜"].dt.to_period("M").astype(str)
                 cd = cd[cd["월"].notna()]
-
-                # 품목별 월매출
                 mp = cd.groupby(["월","품목코드"], dropna=False).agg(
                     매출액=("금액(원)","sum"), 판매량=("수량(M2)","sum")).reset_index()
                 mp = mp[mp["품목코드"].astype(str).str.lower() != "nan"]
-
-                # 월 총액
                 mt = cd.groupby("월").agg(총매출액=("금액(원)","sum"),
                                            총판매량=("수량(M2)","sum")).reset_index()
-
                 col_l, col_r = st.columns([3,1])
-
                 with col_l:
-                    # 판매금액 누적 막대 + 총액 라인
                     fig1 = px.bar(mp, x="월", y="매출액", color="품목코드",
                                   barmode="stack",
                                   title="월별 품목별 판매금액 (누적 막대)",
@@ -360,9 +320,7 @@ with tab3:
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         yaxis_tickformat=",")
                     st.plotly_chart(fig1, use_container_width=True)
-
                 with col_r:
-                    # 판매량 라인 차트
                     fig2 = px.line(mp, x="월", y="판매량", color="품목코드",
                                    title="월별 판매량 (M²)",
                                    labels={"판매량":"M²","월":""},
@@ -372,18 +330,13 @@ with tab3:
                                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
                                        yaxis_tickformat=",")
                     st.plotly_chart(fig2, use_container_width=True)
-
-                # 월별 상세 테이블
                 with st.expander("📋 월별 수치 상세 보기"):
                     pivot = mp.pivot_table(index="월", columns="품목코드",
                                            values="매출액", aggfunc="sum", fill_value=0).reset_index()
                     pivot["월합계"] = pivot.drop(columns="월").sum(axis=1)
                     st.dataframe(auto_fmt(pivot), use_container_width=True)
-
-            # ── ⑦ 단가 역전 현상 자동 감지 & 분석 ──
             st.markdown("---")
             st.markdown("#### 🔍 단가 역전 현상 분석 (대형 > 중형 단가 감지)")
-
             if "기준단가(원/M2)" in tier_agg.columns and "구분" in tier_agg.columns:
                 anomalies = []
                 for keys, grp in tier_agg.groupby(GC, dropna=False):
@@ -402,14 +355,11 @@ with tab3:
                                     "대형_단가": d_large[0],
                                     "역전폭(원)": round(d_large[0]-d_medium[0],0)
                                 })
-
                 if anomalies:
                     st.warning(f"⚠️ {len(anomalies)}개 품목에서 대형 기준단가가 중형보다 높은 역전 현상이 감지되었습니다.")
                     st.dataframe(pd.DataFrame(anomalies), use_container_width=True)
-
                     st.markdown("""
 **📌 단가 역전 현상의 주요 원인 분석:**
-
 | 원인 | 설명 | 확인 방법 |
 |------|------|-----------|
 | **① 사양 차이** | 대형 거래처가 특수폭·고점착제 등 고가 사양 위주 구매 | 거래처별 검색 탭에서 가로폭이력·점착제코드 확인 |
@@ -417,7 +367,6 @@ with tab3:
 | **③ 거래 집중도** | 대형 거래처라도 특정 품목은 소량만 구매하여 소형처럼 분류됨 | 복합지표 재검토 (수량 비중 높임 추천) |
 | **④ 데이터 편향** | 중형 거래처의 할인 계약이 반영된 경우 | 원자료에서 이상치 단가 확인 |
 | **⑤ 납기·조건 차이** | 긴급 발주·소량 다빈도 납품으로 인한 프리미엄 단가 | 출고횟수 대비 수량 확인 |
-
 > 💡 **권장 조치**: 역전 품목은 거래처별 검색 탭에서 해당 거래처의 상세 내역을 확인하고, 필요시 단가 기준을 수동으로 재검토하세요.
                     """)
                 else:
@@ -425,7 +374,6 @@ with tab3:
             else:
                 st.info("단가 데이터가 없어 역전 분석을 수행할 수 없습니다.")
 
-# ══════════ TAB 4 ══════════
 with tab4:
     st.subheader("원자료(필터 적용됨)")
     st.dataframe(auto_fmt(q), use_container_width=True)
