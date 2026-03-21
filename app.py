@@ -7,35 +7,35 @@ import os
 
 st.set_page_config(page_title="출고 이력 검색", layout="wide")
 
-# ── [FIX 2] 천단위 콤마 포맷 자동 감지 ────────────────────────
+# ── 천단위 콤마 포맷 자동 감지 ────────────────────────
 def auto_fmt(df):
     fmt = {}
     for col in df.columns:
         if df[col].dtype not in [object, bool] and not str(df[col].dtype).startswith("datetime"):
-            if any(k in col for k in ["단가","금액","매출","원","기준단가","기준월"]):
+            if any(k in col for k in ["단가","금액","매출","원","기준단가","기준월","차액","감소액"]):
                 fmt[col] = "{:,.0f}"
             elif any(k in col for k in ["M2","총량","수량","기준수량","월평균","판매량"]):
                 fmt[col] = "{:,.1f}"
-            elif any(k in col for k in ["횟수","업체수","거래처수","개월"]):
+            elif any(k in col for k in ["횟수","업체수","거래처수","개월","순위"]):
                 fmt[col] = "{:,.0f}"
+            elif any(k in col for k in ["하락률","증감률","비율"]):
+                fmt[col] = "{:.1f}%"
     return df.style.format(fmt, na_rep="-")
 
-# ── [FIX 2] 피벗 테이블 전용 포맷 (모든 숫자 컬럼 천단위 콤마) ──
+# ── 피벗 테이블 전용 포맷 ──
 def fmt_pivot(df):
     fmt = {}
     for col in df.columns:
-        if col == "월":
+        if col in ["품목코드","품목명(공식)","거래처"]:
             continue
         if pd.api.types.is_numeric_dtype(df[col]):
             fmt[col] = "{:,.0f}"
     return df.style.format(fmt, na_rep="-")
 
-# ── [FIX 3] 구분별 기준견적가 — 품목 그룹별 교번 배경색 스타일 ──
-TIER_COLORS = ["#EBF4FF", "#FFFFFF"]  # 파란계열 / 흰색 교번
+# ── 구분별 기준견적가 — 품목 그룹별 교번 배경색 스타일 ──
+TIER_COLORS = ["#EBF4FF", "#FFFFFF"]
 
 def style_tier_grouped(df, gc_cols):
-    """품목코드 그룹 단위로 행 배경색을 교번 적용"""
-    # 그룹 키 → 색상 인덱스 매핑
     df_reset = df.reset_index(drop=True)
     seen = {}
     group_idx = []
@@ -50,7 +50,6 @@ def style_tier_grouped(df, gc_cols):
         color = TIER_COLORS[group_idx[i] % len(TIER_COLORS)]
         return [f"background-color: {color}"] * len(row)
 
-    # 숫자 컬럼 포맷
     num_fmt = {}
     for col in df.select_dtypes(include="number").columns:
         if any(k in col for k in ["단가","금액","매출","원"]):
@@ -61,7 +60,6 @@ def style_tier_grouped(df, gc_cols):
             num_fmt[col] = "{:,.0f}"
 
     return df.style.apply(row_style, axis=1).format(num_fmt, na_rep="-")
-
 
 def sorted_unique(series):
     if series is None: return []
@@ -167,8 +165,7 @@ def load_excel(file_bytes):
 
 DEFAULT_FILE = "data.xlsx"
 st.title("출고 이력 검색(거래처/품목/가로폭/점착제)")
-uploaded = st.file_uploader("📂 다른 파일 업로드 (미업로드 시 기본 데이터 자동 로드)",
-                             type=["xlsx"])
+uploaded = st.file_uploader("📂 다른 파일 업로드 (미업로드 시 기본 데이터 자동 로드)", type=["xlsx"])
 
 if uploaded:
     file_bytes = uploaded.getvalue(); st.success("✅ 업로드 파일 사용")
@@ -201,7 +198,14 @@ if sel_adh:  q = q[q["점착제코드"].astype(str).isin(sel_adh)]
 if sdate and edate and "날짜" in q.columns:
     q = q[(q["날짜"]>=pd.to_datetime(sdate)) & (q["날짜"]<=pd.to_datetime(edate))]
 
-tab1, tab2, tab3, tab4 = st.tabs(["거래처별 검색","품목별 검색","🏷️ 견적 레퍼런스","원자료"])
+# ── [변경] 탭 구성: 매출 하락 분석 탭 추가 ──
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "거래처별 검색",
+    "품목별 검색", 
+    "🏷️ 견적 레퍼런스",
+    "📉 매출 하락 분석",
+    "원자료"
+])
 
 # ══════════════════════════════════════════════════════════
 # TAB 1 — 거래처별 검색
@@ -301,7 +305,6 @@ with tab3:
                       if pd.notna(r["최저단가"]) and pd.notna(r["최고단가"]) else "-",
             axis=1)
 
-        # ── 제품별 개요 ──────────────────────────────────
         st.markdown("#### 📋 제품별 개요")
         ov_show = [c for c in GC + ["단가범위(원/M2)","최저단가","최고단가","거래처수",
                                      "월평균판매량_M2","월평균판매액_원","총량_M2","총매출액"]
@@ -311,7 +314,6 @@ with tab3:
             auto_fmt(overview[ov_show].sort_values(sc) if sc else overview[ov_show]),
             use_container_width=True)
 
-        # ── 거래처별 분류 계산 ───────────────────────────
         cv = (q_ref.groupby(GC+["거래처"], dropna=False)
                    .agg(c_총량=("수량(M2)","sum"), c_총금액=("금액(원)","sum"))
                    .reset_index())
@@ -365,14 +367,12 @@ with tab3:
                                       "기준단가(원/M2)","기준월판매금액(원)"]
                       if c in tier_agg.columns]
 
-            # ── [FIX 3] 구분별 기준견적가 — 품목 그룹별 교번 색상 ──
             st.markdown("#### 🏷️ 구분별 기준 견적가 (세로형 — 모바일 최적화)")
             st.dataframe(
                 style_tier_grouped(tier_agg[t_show].reset_index(drop=True), GC),
                 use_container_width=True,
                 height=400)
 
-            # ── [FIX 4] 편집 가능 버전 (복사/붙여넣기 & 수정) ──
             with st.expander("✏️ 기준 견적가 — 수정 가능 버전 (복사·붙여넣기·직접 수정)"):
                 st.caption("셀을 클릭하여 값을 직접 수정하거나, Ctrl+C / Ctrl+V 로 복사·붙여넣기 할 수 있습니다.")
                 edited_tier = st.data_editor(
@@ -382,7 +382,6 @@ with tab3:
                     key="tier_editor")
                 col_dl1, col_dl2 = st.columns([1,5])
                 with col_dl1:
-                    # 수정된 데이터 CSV 다운로드
                     csv_bytes = edited_tier.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                     st.download_button(
                         "📥 수정 데이터 CSV 다운로드",
@@ -392,7 +391,6 @@ with tab3:
 
             st.markdown("---")
 
-            # ── [FIX 1] 요약 지표 — st.metric → 컴팩트 데이터프레임 ──
             summary_dict: dict = {}
             summary_dict["조회 품목 수"] = f"{len(overview):,}종"
             summary_dict["적용 기간"] = f"{n_months:,}개월"
@@ -413,7 +411,6 @@ with tab3:
 
             st.markdown("---")
 
-            # ── 월별 판매 추이 ───────────────────────────
             st.markdown("#### 📊 월별 품목별 판매 추이")
             if ("날짜" in q_ref.columns and "금액(원)" in q_ref.columns
                     and "품목코드" in q_ref.columns):
@@ -463,19 +460,43 @@ with tab3:
                         yaxis_tickformat=",")
                     st.plotly_chart(fig2, use_container_width=True)
 
-                # ── [FIX 2] 월별 수치 상세 — 천단위 콤마 적용 ──
-                with st.expander("📋 월별 수치 상세 보기"):
+                # ── [변경 1] 월별 수치 상세 — 행↔열 전치 (품목이 행, 월이 열) ──
+                with st.expander("📋 월별 수치 상세 보기 (품목별 월간 판매금액)"):
+                    st.caption("💡 행: 품목코드, 열: 월별 판매금액 (편집 및 복사 가능)")
+                    
+                    # 피벗 테이블: 품목이 행, 월이 열
                     pivot = mp.pivot_table(
-                        index="월", columns="품목코드",
+                        index="품목코드", columns="월",
                         values="매출액", aggfunc="sum",
-                        fill_value=0).reset_index()
-                    pivot.columns.name = None  # 컬럼 레벨 이름 제거
-                    pivot["월합계"] = pivot.drop(columns="월").sum(axis=1)
-                    st.dataframe(fmt_pivot(pivot), use_container_width=True)
+                        fill_value=0)
+                    
+                    # 합계 컬럼 추가
+                    month_cols = list(pivot.columns)
+                    pivot["합계"] = pivot[month_cols].sum(axis=1)
+                    
+                    # 합계 기준 내림차순 정렬
+                    pivot = pivot.sort_values("합계", ascending=False)
+                    
+                    # 인덱스 리셋
+                    pivot_reset = pivot.reset_index()
+                    
+                    # 편집 가능한 테이블
+                    edited_pivot = st.data_editor(
+                        pivot_reset,
+                        use_container_width=True,
+                        num_rows="dynamic",
+                        key="monthly_detail_editor")
+                    
+                    # CSV 다운로드
+                    csv_pivot = edited_pivot.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                    st.download_button(
+                        "📥 월별 수치 CSV 다운로드",
+                        data=csv_pivot,
+                        file_name="월별_품목별_판매금액.csv",
+                        mime="text/csv")
 
             st.markdown("---")
 
-            # ── 단가 역전 분석 ───────────────────────────
             st.markdown("#### 🔍 단가 역전 현상 분석 (대형 > 중형 단가 감지)")
             if "기준단가(원/M2)" in tier_agg.columns and "구분" in tier_agg.columns:
                 anomalies = []
@@ -499,26 +520,174 @@ with tab3:
                         f"⚠️ {len(anomalies)}개 품목에서 대형 기준단가가 중형보다 높은 "
                         "역전 현상이 감지되었습니다.")
                     st.dataframe(pd.DataFrame(anomalies), use_container_width=True)
-                    st.markdown("""
-**📌 단가 역전 현상의 주요 원인 분석:**
-| 원인 | 설명 | 확인 방법 |
-|------|------|-----------|
-| **① 사양 차이** | 대형 거래처가 특수폭·고점착제 등 고가 사양 위주 구매 | 거래처별 검색 탭에서 가로폭이력·점착제코드 확인 |
-| **② 최근 단가 인상** | 대형 거래처에 최근 단가가 인상된 경우 (원자재 가격 반영 등) | 원자료 탭에서 날짜·단가 추이 확인 |
-| **③ 거래 집중도** | 대형 거래처라도 특정 품목은 소량만 구매하여 소형처럼 분류됨 | 복합지표 재검토 (수량 비중 높임 추천) |
-| **④ 데이터 편향** | 중형 거래처의 할인 계약이 반영된 경우 | 원자료에서 이상치 단가 확인 |
-| **⑤ 납기·조건 차이** | 긴급 발주·소량 다빈도 납품으로 인한 프리미엄 단가 | 출고횟수 대비 수량 확인 |
-> 💡 **권장 조치**: 역전 품목은 거래처별 검색 탭에서 해당 거래처의 상세 내역을 확인하고,
-> 필요시 단가 기준을 수동으로 재검토하세요.
-                    """)
                 else:
                     st.success("✅ 모든 품목에서 소형 ≥ 중형 ≥ 대형 단가 순서가 정상입니다.")
             else:
                 st.info("단가 데이터가 없어 역전 분석을 수행할 수 없습니다.")
 
 # ══════════════════════════════════════════════════════════
-# TAB 4 — 원자료
+# TAB 4 — [신규] 매출 하락 분석
 # ══════════════════════════════════════════════════════════
 with tab4:
+    st.subheader("📉 매출 하락 업체 분석")
+    st.caption("설정 기간 내 전반부 대비 후반부 매출 감소가 큰 상위 35% 업체를 분석합니다.")
+
+    if q.empty or "날짜" not in q.columns or "금액(원)" not in q.columns or "거래처" not in q.columns:
+        st.warning("분석에 필요한 데이터(날짜, 금액, 거래처)가 부족합니다.")
+    else:
+        # 월별 데이터 준비
+        decline_df = q.copy()
+        decline_df["월"] = decline_df["날짜"].dt.to_period("M").astype(str)
+        decline_df = decline_df[decline_df["월"].notna()]
+        
+        # 전체 월 리스트
+        all_months = sorted(decline_df["월"].unique())
+        if len(all_months) < 2:
+            st.info("분석 기간이 너무 짧습니다. (최소 2개월 필요)")
+        else:
+            # 전반부/후반부 구분
+            mid_idx = len(all_months) // 2
+            first_half = all_months[:mid_idx] if mid_idx > 0 else [all_months[0]]
+            last_half = all_months[mid_idx:] if mid_idx < len(all_months) else [all_months[-1]]
+            
+            st.info(f"📅 분석 기준: 전반부 {first_half[0]}~{first_half[-1]} vs 후반부 {last_half[0]}~{last_half[-1]}")
+            
+            # 거래처별 월별 매출 집계
+            monthly_sales = decline_df.groupby(["거래처","월"], dropna=False)["금액(원)"].sum().reset_index()
+            
+            # 거래처별 전반부/후반부 평균 매출 및 감소액 계산
+            decline_analysis = []
+            for cust in monthly_sales["거래처"].unique():
+                cust_data = monthly_sales[monthly_sales["거래처"] == cust]
+                
+                # 전반부 평균
+                first_data = cust_data[cust_data["월"].isin(first_half)]["금액(원)"]
+                avg_first = first_data.mean() if len(first_data) > 0 else 0
+                
+                # 후반부 평균
+                last_data = cust_data[cust_data["월"].isin(last_half)]["금액(원)"]
+                avg_last = last_data.mean() if len(last_data) > 0 else 0
+                
+                # 감소액 (음수면 하락)
+                decrease_amount = avg_last - avg_first
+                
+                # 전체 매출액
+                total_sales = cust_data["금액(원)"].sum()
+                
+                decline_analysis.append({
+                    "거래처": cust,
+                    "전반부_평균매출": round(avg_first, 0),
+                    "후반부_평균매출": round(avg_last, 0),
+                    "매출_감소액": round(decrease_amount, 0),
+                    "전체_매출액": round(total_sales, 0)
+                })
+            
+            decline_df_result = pd.DataFrame(decline_analysis)
+            
+            # [변경 2] 매출 감소액 기준 상위 35% (가장 많이 감소한 업체들)
+            decline_customers = decline_df_result[decline_df_result["매출_감소액"] < 0].copy()
+            
+            if decline_customers.empty:
+                st.success("✅ 설정 기간 동안 매출이 하락한 업체가 없습니다.")
+            else:
+                # 감소액 기준 정렬 (가장 많이 감소한 순)
+                decline_customers = decline_customers.sort_values("매출_감소액")
+                
+                # 상위 35% 선정
+                n_customers = len(decline_customers)
+                top_35_count = max(1, int(np.ceil(n_customers * 0.35)))
+                top_decline_customers = decline_customers.head(top_35_count).copy()
+                top_decline_customers["순위"] = range(1, len(top_decline_customers) + 1)
+                
+                # 결과 표시
+                col_list, col_detail = st.columns([2, 3])
+                
+                with col_list:
+                    st.markdown(f"#### 🔻 매출 하락 상위 {len(top_decline_customers)}개 업체")
+                    
+                    # 편집 가능한 업체 목록
+                    display_cols = ["순위","거래처","전체_매출액","전반부_평균매출","후반부_평균매출","매출_감소액"]
+                    edited_decline = st.data_editor(
+                        top_decline_customers[display_cols],
+                        use_container_width=True,
+                        num_rows="dynamic",
+                        key="decline_customers_editor")
+                    
+                    # CSV 다운로드
+                    csv_decline = edited_decline.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                    st.download_button(
+                        "📥 하락 업체 목록 CSV 다운로드",
+                        data=csv_decline,
+                        file_name="매출하락업체_분석.csv",
+                        mime="text/csv")
+                
+                with col_detail:
+                    # [변경 3] 업체 선택 → 품목별 월간 분석
+                    st.markdown("#### 📊 업체별 품목 분석")
+                    
+                    selected_customer = st.selectbox(
+                        "업체를 선택하여 품목별 상세 분석",
+                        options=["선택하세요"] + top_decline_customers["거래처"].tolist(),
+                        key="customer_detail_select")
+                    
+                    if selected_customer != "선택하세요":
+                        st.markdown(f"##### 📋 [{selected_customer}] 품목별 월간 매출 추이")
+                        
+                        # 선택 업체의 품목별 월별 데이터
+                        customer_data = decline_df[decline_df["거래처"] == selected_customer]
+                        
+                        if "품목코드" in customer_data.columns:
+                            # 품목별 월별 매출 피벗
+                            customer_pivot = customer_data.pivot_table(
+                                index="품목코드", columns="월",
+                                values="금액(원)", aggfunc="sum",
+                                fill_value=0)
+                            
+                            # [변경 3] 품목별 하락률 계산 및 정렬
+                            product_declines = []
+                            for prod in customer_pivot.index:
+                                prod_data = customer_pivot.loc[prod]
+                                
+                                # 전반부/후반부 평균
+                                first_avg = prod_data[prod_data.index.isin(first_half)].mean()
+                                last_avg = prod_data[prod_data.index.isin(last_half)].mean()
+                                
+                                decline_amount = last_avg - first_avg
+                                product_declines.append(decline_amount)
+                            
+                            # 하락률로 정렬
+                            customer_pivot["_decline"] = product_declines
+                            customer_pivot = customer_pivot.sort_values("_decline")
+                            customer_pivot = customer_pivot.drop(columns=["_decline"])
+                            
+                            # 합계 컬럼 추가
+                            month_cols = list(customer_pivot.columns)
+                            customer_pivot["합계"] = customer_pivot[month_cols].sum(axis=1)
+                            
+                            # 인덱스 리셋
+                            customer_pivot_reset = customer_pivot.reset_index()
+                            
+                            # [변경 4] 편집 가능한 테이블
+                            st.caption(f"💡 {selected_customer}의 품목별 월간 매출 (하락폭 큰 순 정렬)")
+                            edited_customer_pivot = st.data_editor(
+                                customer_pivot_reset,
+                                use_container_width=True,
+                                num_rows="dynamic",
+                                key="customer_product_editor")
+                            
+                            # CSV 다운로드
+                            csv_customer = edited_customer_pivot.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                            st.download_button(
+                                "📥 품목별 월간 매출 CSV 다운로드",
+                                data=csv_customer,
+                                file_name=f"{selected_customer}_품목별_월간매출.csv",
+                                mime="text/csv")
+                        else:
+                            st.warning("품목코드 정보가 없어 품목별 분석을 수행할 수 없습니다.")
+
+# ══════════════════════════════════════════════════════════
+# TAB 5 — 원자료
+# ══════════════════════════════════════════════════════════
+with tab5:
     st.subheader("원자료(필터 적용됨)")
     st.dataframe(auto_fmt(q), use_container_width=True)
