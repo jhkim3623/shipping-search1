@@ -147,16 +147,7 @@ def sorted_unique(series):
     return sorted(s.unique())
 
 
-def to_yymm(series):
-    dt = pd.to_datetime(series, errors="coerce")
-    return dt.dt.strftime("%y%m")
-
-
 def add_year_month_axis(fig, x_dates):
-    """
-    월은 ticktext로, 연도는 annotation으로 하단에 표시.
-    사용자 요청의 '상단 월 / 하단 연도' 느낌을 최대한 유사하게 구현.
-    """
     dt = pd.to_datetime(pd.Series(x_dates), errors="coerce").dropna().sort_values().unique()
     if len(dt) == 0:
         return fig
@@ -175,7 +166,6 @@ def add_year_month_axis(fig, x_dates):
         zeroline=False
     )
 
-    # 연도 annotation
     years = sorted(pd.Series(dt).dt.year.unique())
     for y in years:
         year_dates = [d for d in dt if pd.Timestamp(d).year == y]
@@ -191,8 +181,6 @@ def add_year_month_axis(fig, x_dates):
             showarrow=False,
             font=dict(size=12, color="black"),
         )
-
-        # 연도 시작선
         fig.add_vline(
             x=year_dates[0],
             line_width=1,
@@ -202,6 +190,12 @@ def add_year_month_axis(fig, x_dates):
 
     fig.update_layout(margin=dict(b=90))
     return fig
+
+
+def sales_to_manwon_label(value):
+    # 원 → 만원 단위 표기
+    # 예: 45,000,000원 -> 4,500
+    return f"{int(round(value / 10000.0, 0)):,}"
 
 
 @st.cache_data
@@ -488,7 +482,6 @@ with tab2:
 # ══════════════════════════════════════════════════════════
 with tab3:
     st.subheader("🏷️ 견적 레퍼런스 — 기준 견적가 & 판매 동향")
-    st.caption("단가 0 및 샘플 품목 자동 제외")
 
     q_ref = q.copy()
 
@@ -505,16 +498,6 @@ with tab3:
         grp_base = ["품목코드", "품목명(공식)", "점착제코드", "점착제명"]
         GC = [c for c in grp_base if c in q_ref.columns]
 
-        if "날짜" in q_ref.columns:
-            vd = q_ref["날짜"].dropna()
-            if len(vd):
-                d0, d1 = vd.min(), vd.max()
-                n_months = max(1, (d1.year - d0.year) * 12 + d1.month - d0.month + 1)
-            else:
-                n_months = 1
-        else:
-            n_months = 1
-
         overview = q_ref.groupby(GC, dropna=False).agg(
             최저단가=("단가(원/M2)", "min"),
             최고단가=("단가(원/M2)", "max"),
@@ -523,9 +506,6 @@ with tab3:
             총량_M2=("수량(M2)", "sum"),
             총매출액=("금액(원)", "sum"),
         ).reset_index()
-
-        overview["월평균판매량_M2"] = (overview["총량_M2"] / n_months).round(1)
-        overview["월평균판매액_원"] = (overview["총매출액"] / n_months).round(0)
 
         clean_and_safe_display(
             overview,
@@ -639,8 +619,7 @@ with tab4:
                     f"통계추세:{stat_score:.1f}/20 | "
                     f"AI분석:{ai_score:.1f}/20 | "
                     f"감소액:{int(decline_amount):,}원 | "
-                    f"하락률:{decline_rate*100:.1f}% | "
-                    f"기울기:{int(round(slope,0)):,} | CV:{cv:.2f}"
+                    f"하락률:{decline_rate*100:.1f}%"
                 )
 
                 return {
@@ -722,19 +701,16 @@ with tab4:
                     if customer_data.empty:
                         st.warning("해당 업체 데이터가 없습니다.")
                     else:
-                        st.markdown(f"#### 📋 [{selected_cust_name}] 품목별 월간 매출 분석")
+                        st.markdown(f"## 📉 [{selected_cust_name}] 매출 추이 분석")
+                        st.caption("전체 매출 감소 여부와 감소 기여 품목 분석")
 
-                        # 월별 업체 총매출
                         customer_total_monthly = (
                             customer_data.groupby("월", as_index=False)["금액(원)"]
                             .sum()
                             .sort_values("월")
                         )
                         customer_total_monthly["날짜축"] = pd.to_datetime(customer_total_monthly["월"] + "-01")
-                        customer_total_monthly["월표기"] = customer_total_monthly["날짜축"].dt.strftime("%m")
-                        customer_total_monthly["연도"] = customer_total_monthly["날짜축"].dt.strftime("%Y")
 
-                        # 품목별 월간
                         product_monthly = (
                             customer_data.groupby(["품목코드", "월"], as_index=False)["금액(원)"]
                             .sum()
@@ -742,7 +718,6 @@ with tab4:
                         )
                         product_monthly["날짜축"] = pd.to_datetime(product_monthly["월"] + "-01")
 
-                        # 품목별 감소 기여도
                         pivot_prod = product_monthly.pivot_table(
                             index="품목코드",
                             columns="월",
@@ -772,6 +747,7 @@ with tab4:
                         contribution_df = pd.DataFrame(contribution_rows)
                         contribution_df = contribution_df.sort_values("감소액", ascending=False).reset_index(drop=True)
 
+                        st.markdown("### 📋 품목별 변화율 상세")
                         clean_and_safe_display(
                             contribution_df,
                             pinned_cols=["품목코드"],
@@ -779,21 +755,21 @@ with tab4:
                         )
 
                         st.markdown("---")
-                        st.markdown(f"### 📈 [{selected_cust_name}] 영업용 시각화")
-                        st.caption("전체 매출 감소 여부와 감소 기여 품목을 한눈에 파악할 수 있게 구성했습니다.")
+                        st.markdown("### 📈 영업용 시각화")
 
-                        # ─────────────────────────────────────────────
-                        # 그래프 1: 업체 전체 월별 매출 추이 + 추세선
-                        # ─────────────────────────────────────────────
+                        # 1) 업체 전체 월별 매출 추이
                         fig_total = go.Figure()
 
                         fig_total.add_trace(go.Scatter(
                             x=customer_total_monthly["날짜축"],
                             y=customer_total_monthly["금액(원)"],
-                            mode="lines+markers",
+                            mode="lines+markers+text",
                             name="월별 총매출",
                             line=dict(color="#1f77b4", width=3),
-                            marker=dict(size=8)
+                            marker=dict(size=8),
+                            text=[sales_to_manwon_label(v) for v in customer_total_monthly["금액(원)"]],
+                            textposition="top center",
+                            textfont=dict(size=10, color="#1f77b4"),
                         ))
 
                         if len(customer_total_monthly) >= 2:
@@ -819,9 +795,7 @@ with tab4:
                         fig_total = add_year_month_axis(fig_total, customer_total_monthly["날짜축"])
                         st.plotly_chart(fig_total, use_container_width=True)
 
-                        # ─────────────────────────────────────────────
-                        # 그래프 2: 품목별 매출 감소 기여도
-                        # ─────────────────────────────────────────────
+                        # 2) 품목별 매출 감소 기여도
                         top_contrib = contribution_df.head(12).copy()
                         if not top_contrib.empty:
                             fig_contrib = go.Figure()
@@ -845,9 +819,7 @@ with tab4:
                             )
                             st.plotly_chart(fig_contrib, use_container_width=True)
 
-                        # ─────────────────────────────────────────────
-                        # 그래프 3: 감소 주도 품목 월별 추이
-                        # ─────────────────────────────────────────────
+                        # 3) 감소 주도 품목 월별 추이
                         top_products = contribution_df.head(5)["품목코드"].tolist()
                         top_product_monthly = product_monthly[product_monthly["품목코드"].isin(top_products)].copy()
 
@@ -870,9 +842,7 @@ with tab4:
                             fig_products = add_year_month_axis(fig_products, top_product_monthly["날짜축"])
                             st.plotly_chart(fig_products, use_container_width=True)
 
-                        # ─────────────────────────────────────────────
-                        # 그래프 4: 전반부 vs 후반부 직접 비교
-                        # ─────────────────────────────────────────────
+                        # 4) 전반부 vs 후반부 비교
                         if not contribution_df.empty:
                             comp_df = contribution_df.head(12).copy()
                             fig_bar = go.Figure()
@@ -901,13 +871,6 @@ with tab4:
                                 yaxis_title="매출액(원)"
                             )
                             st.plotly_chart(fig_bar, use_container_width=True)
-
-                            st.markdown("##### 📋 품목별 변화율 상세")
-                            clean_and_safe_display(
-                                contribution_df,
-                                pinned_cols=["품목코드"],
-                                text_cols=["품목코드"]
-                            )
 
 
 # ══════════════════════════════════════════════════════════
