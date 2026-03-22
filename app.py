@@ -330,30 +330,6 @@ def sales_to_manwon_label(value):
     return f"{int(round(float(value) / 10000.0, 0)):,}"
 
 
-def make_text_position_map(items):
-    positions = ["top center", "bottom center", "middle right", "middle left"]
-    return {str(item): positions[i % len(positions)] for i, item in enumerate(items)}
-
-
-def make_indexed_series(df, group_col, value_col, time_col):
-    temp = df.copy().sort_values([group_col, time_col])
-
-    def _calc(g):
-        g = g.copy()
-        base_candidates = g[value_col].replace(0, np.nan).dropna()
-        if len(base_candidates) == 0:
-            g["지수값"] = np.nan
-        else:
-            base = base_candidates.iloc[0]
-            if pd.isna(base) or base == 0:
-                g["지수값"] = np.nan
-            else:
-                g["지수값"] = (g[value_col] / base) * 100
-        return g
-
-    return temp.groupby(group_col, group_keys=False).apply(_calc)
-
-
 def calc_cv(series):
     s = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
     if len(s) == 0:
@@ -395,33 +371,6 @@ def build_color_map(items):
     ]
     items = [str(x) for x in items]
     return {item: palette[i % len(palette)] for i, item in enumerate(items)}
-
-
-def should_show_helper_chart(top_product_monthly):
-    if top_product_monthly is None or top_product_monthly.empty:
-        return False, 0.0
-
-    if "품목표시" not in top_product_monthly.columns or "금액(원)" not in top_product_monthly.columns:
-        return False, 0.0
-
-    temp = (
-        top_product_monthly.groupby("품목표시", as_index=False)["금액(원)"]
-        .sum()
-        .rename(columns={"금액(원)": "총매출"})
-    )
-    temp = temp[temp["총매출"] > 0].copy()
-
-    if len(temp) < 2:
-        return False, 0.0
-
-    max_v = temp["총매출"].max()
-    min_v = temp["총매출"].min()
-
-    if min_v <= 0:
-        return True, np.inf
-
-    ratio = max_v / min_v
-    return bool(ratio >= 5), ratio
 
 
 def build_return_base(df):
@@ -506,9 +455,6 @@ def infer_ai_return_analysis(row):
     return " | ".join(reasons)
 
 
-# ══════════════════════════════════════════════════════════
-# 데이터 로드
-# ══════════════════════════════════════════════════════════
 @st.cache_data
 def load_excel(file_bytes):
     xls = pd.ExcelFile(BytesIO(file_bytes))
@@ -549,13 +495,8 @@ def load_excel(file_bytes):
         if col in df.columns:
             s = df[col].astype(str).str.strip()
             df[col] = s.replace({
-                "": pd.NA,
-                "0": pd.NA,
-                "0.0": pd.NA,
-                "nan": pd.NA,
-                "NaN": pd.NA,
-                "None": pd.NA,
-                "<NA>": pd.NA,
+                "": pd.NA, "0": pd.NA, "0.0": pd.NA,
+                "nan": pd.NA, "NaN": pd.NA, "None": pd.NA, "<NA>": pd.NA,
             })
 
     for c in ["거래처", "품목코드", "점착제코드", "품목명_고객표현", "점착제_고객표현"]:
@@ -653,15 +594,11 @@ def load_excel(file_bytes):
     return rec, alias, prod, adh, cust
 
 
-# ══════════════════════════════════════════════════════════
-# 분석용 사전 계산
-# ══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def build_analysis_cache(q):
     df = q.copy()
     df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
     df = df[df["월"].notna() & (df["월"] != "")].copy()
-
     df = safe_make_product_label(df)
 
     monthly_sales = (
@@ -686,7 +623,6 @@ def build_analysis_cache(q):
     product_monthly["만원라벨"] = product_monthly["금액(원)"].apply(sales_to_manwon_label)
 
     all_months = sorted(df["월"].unique().tolist())
-
     return df, monthly_sales, customer_total_monthly, product_monthly, all_months
 
 
@@ -790,7 +726,6 @@ def build_priority_results(monthly_sales, detail_df, all_months):
         ["AI_우선순위점수", "실제감소액", "기울기", "품목감소확산도"],
         ascending=[False, False, True, False]
     ).reset_index(drop=True)
-
     result_df["순위"] = range(1, len(result_df) + 1)
     return result_df, first_half, last_half
 
@@ -801,7 +736,6 @@ def build_quote_reference(q_ref):
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     df = q_ref.copy()
-
     required_cols = {"날짜", "품목코드", "거래처", "수량(M2)", "금액(원)", "단가(원/M2)"}
     if not required_cols.issubset(set(df.columns)):
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -840,10 +774,7 @@ def build_quote_reference(q_ref):
 
     monthly_pc = (
         df.groupby(["품목코드", "거래처", "월"], dropna=False)
-        .agg(
-            월출고량=("수량(M2)", "sum"),
-            월매출=("금액(원)", "sum"),
-        )
+        .agg(월출고량=("수량(M2)", "sum"), 월매출=("금액(원)", "sum"))
         .reset_index()
         .sort_values(["품목코드", "거래처", "월"])
     )
@@ -903,14 +834,10 @@ def build_quote_reference(q_ref):
     if ref_detail.empty:
         return overview, pd.DataFrame(), pd.DataFrame()
 
+    ref_detail = ref_detail.merge(recent_unit, on=["품목코드", "거래처"], how="left")
     ref_detail = ref_detail.merge(
-        recent_unit,
-        on=["품목코드", "거래처"],
-        how="left"
-    ).merge(
         unit_extreme[["품목코드", "거래처", "최저단가", "최고단가"]],
-        on=["품목코드", "거래처"],
-        how="left"
+        on=["품목코드", "거래처"], how="left"
     )
 
     prod_bench = ref_detail.groupby("품목코드").agg(
@@ -960,7 +887,6 @@ def build_quote_reference(q_ref):
 
     ref_detail["업체성향"] = types
     ref_detail["AI분석"] = comments
-
     ref_detail["대표점수"] = (
         scale_to_100(ref_detail["총매출액"]).values * 0.35 +
         scale_to_100(ref_detail["월평균_출고량"]).values * 0.25 +
@@ -970,15 +896,11 @@ def build_quote_reference(q_ref):
     )
 
     representative = (
-        ref_detail.sort_values(
-            ["품목코드", "대표점수", "총매출액"],
-            ascending=[True, False, False]
-        )
+        ref_detail.sort_values(["품목코드", "대표점수", "총매출액"], ascending=[True, False, False])
         .groupby("품목코드", as_index=False)
         .head(5)
         .reset_index(drop=True)
     )
-
     representative["최근날짜"] = pd.to_datetime(representative["최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d")
 
     special_rows = []
@@ -996,51 +918,20 @@ def build_quote_reference(q_ref):
         picked["대표구분"] = label
         special_rows.append(picked)
 
-    pick_top(
-        ref_detail,
-        ref_detail["업체성향"] == "대량출고형+고매출핵심형",
-        "대량출고형+고매출핵심형",
-        ["품목코드", "총매출액", "월평균_출고량"],
-        [True, False, False]
-    )
-    pick_top(
-        ref_detail,
-        ref_detail["업체성향"] == "가격민감형",
-        "가격민감형",
-        ["품목코드", "최근단가", "총매출액"],
-        [True, True, False]
-    )
-    pick_top(
-        ref_detail,
-        ref_detail["업체성향"] == "성장형",
-        "성장형",
-        ["품목코드", "매출기울기", "총매출액"],
-        [True, False, False]
-    )
-    pick_top(
-        ref_detail,
-        ref_detail["업체성향"] == "소량테스트형",
-        "소량테스트형",
-        ["품목코드", "월평균_매출", "최근단가"],
-        [True, True, True]
-    )
+    pick_top(ref_detail, ref_detail["업체성향"] == "대량출고형+고매출핵심형", "대량출고형+고매출핵심형", ["품목코드", "총매출액", "월평균_출고량"], [True, False, False])
+    pick_top(ref_detail, ref_detail["업체성향"] == "가격민감형", "가격민감형", ["품목코드", "최근단가", "총매출액"], [True, True, False])
+    pick_top(ref_detail, ref_detail["업체성향"] == "성장형", "성장형", ["품목코드", "매출기울기", "총매출액"], [True, False, False])
+    pick_top(ref_detail, ref_detail["업체성향"] == "소량테스트형", "소량테스트형", ["품목코드", "월평균_매출", "최근단가"], [True, True, True])
 
-    lowest_unit = ref_detail.sort_values(
-        ["품목코드", "최저단가", "총매출액"],
-        ascending=[True, True, False]
-    ).groupby("품목코드", as_index=False).head(3).copy()
+    lowest_unit = ref_detail.sort_values(["품목코드", "최저단가", "총매출액"], ascending=[True, True, False]).groupby("품목코드", as_index=False).head(3).copy()
     lowest_unit["대표구분"] = "최저단가 대표업체"
     special_rows.append(lowest_unit)
 
-    highest_unit = ref_detail.sort_values(
-        ["품목코드", "최고단가", "총매출액"],
-        ascending=[True, False, False]
-    ).groupby("품목코드", as_index=False).head(3).copy()
+    highest_unit = ref_detail.sort_values(["품목코드", "최고단가", "총매출액"], ascending=[True, False, False]).groupby("품목코드", as_index=False).head(3).copy()
     highest_unit["대표구분"] = "최고단가 대표업체"
     special_rows.append(highest_unit)
 
     special_reference = pd.concat(special_rows, ignore_index=True) if special_rows else pd.DataFrame()
-
     if not special_reference.empty:
         special_reference = special_reference.sort_values(
             ["품목코드", "대표구분", "총매출액", "거래처"],
@@ -1063,7 +954,6 @@ def draw_quote_reference_chart(special_df):
     chart_df = special_df.copy()
     items = chart_df["품목코드"].astype(str).unique().tolist()
     color_map = build_color_map(items)
-
     fig = go.Figure()
 
     for item in items:
@@ -1075,11 +965,7 @@ def draw_quote_reference_chart(special_df):
             name=str(item),
             text=sub["대표구분"] if "대표구분" in sub.columns else "",
             textposition="top center",
-            marker=dict(
-                size=11,
-                color=color_map[str(item)],
-                line=dict(width=1, color="white")
-            ),
+            marker=dict(size=11, color=color_map[str(item)], line=dict(width=1, color="white")),
             hovertemplate=(
                 f"품목코드: {item}<br>"
                 "거래처: %{x}<br>"
@@ -1093,15 +979,9 @@ def draw_quote_reference_chart(special_df):
         margin=dict(l=20, r=20, t=30, b=90),
         xaxis=dict(title="", tickangle=-35),
         yaxis=dict(title="최근단가(원/M2)", tickformat=",.0f"),
-        legend=dict(
-            orientation="h",
-            yanchor="top",
-            y=-0.28,
-            x=0,
-            xanchor="left"
-        )
+        legend=dict(orientation="h", yanchor="top", y=-0.28, x=0, xanchor="left")
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="quote_reference_chart_main")
 
 
 @st.cache_data(show_spinner=False)
@@ -1296,7 +1176,6 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 
 with tab1:
     st.subheader("거래처별 → 품목별 출고 이력/최근 단가/가로폭")
-
     if q.empty:
         st.warning("조건에 맞는 데이터가 없습니다.")
     else:
@@ -1325,20 +1204,14 @@ with tab1:
             .reset_index()
         )
 
-        g["가중평균단가"] = np.where(
-            g["총량_M2"] > 0,
-            (g["매출액"] / g["총량_M2"]).round(0),
-            0,
-        )
+        g["가중평균단가"] = np.where(g["총량_M2"] > 0, (g["매출액"] / g["총량_M2"]).round(0), 0)
 
         ordered_cols = [
             "거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력",
-            "최근날짜", "최근단가", "출고횟수",
-            "월평균_출고량", "월평균_매출",
+            "최근날짜", "최근단가", "출고횟수", "월평균_출고량", "월평균_매출",
             "총량_M2", "매출액", "가중평균단가"
         ]
         ordered_cols = [c for c in ordered_cols if c in g.columns]
-
         sc = [c for c in ["거래처", "품목코드"] if c in g.columns]
 
         clean_and_safe_display(
@@ -1350,7 +1223,6 @@ with tab1:
 
 with tab2:
     st.subheader("품목별 → 거래처별 출고 이력/총량/단가/매출")
-
     if q.empty:
         st.warning("조건에 맞는 데이터가 없습니다.")
     else:
@@ -1379,19 +1251,13 @@ with tab2:
             .reset_index()
         )
 
-        g2["가중평균단가"] = np.where(
-            g2["총량_M2"] > 0,
-            (g2["매출액"] / g2["총량_M2"]).round(0),
-            0,
-        )
+        g2["가중평균단가"] = np.where(g2["총량_M2"] > 0, (g2["매출액"] / g2["총량_M2"]).round(0), 0)
 
         ordered_cols = [
             "품목코드", "거래처", "최근날짜", "최근단가", "출고횟수",
-            "월평균_출고량", "월평균_매출",
-            "총량_M2", "매출액", "가중평균단가"
+            "월평균_출고량", "월평균_매출", "총량_M2", "매출액", "가중평균단가"
         ]
         ordered_cols = [c for c in ordered_cols if c in g2.columns]
-
         sc = [c for c in ["품목코드", "거래처"] if c in g2.columns]
 
         clean_and_safe_display(
@@ -1403,7 +1269,6 @@ with tab2:
 
 with tab3:
     st.subheader("🏷️ 견적 레퍼런스 — 기준 견적가 & 판매 동향")
-
     q_ref = q.copy()
 
     if "단가(원/M2)" in q_ref.columns:
@@ -1420,9 +1285,8 @@ with tab3:
 
         st.markdown("### 1) 품목 기준 견적 레퍼런스")
         overview_cols = [
-            "품목코드", "점착제코드",
-            "최저단가", "최고단가", "거래처수", "총출고횟수",
-            "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
+            "품목코드", "점착제코드", "최저단가", "최고단가", "거래처수",
+            "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
         ]
         overview_cols = [c for c in overview_cols if c in overview.columns]
 
@@ -1490,18 +1354,11 @@ with tab4:
         elif priority_df.empty:
             st.success("✅ 설정 기간 동안 매출이 하락한 업체가 없습니다.")
         else:
-            st.info(
-                "순위 산정 방식: "
-                "① 감소금액 규모를 가장 크게 반영(75%), "
-                "② 감소 추세/속도 반영(15%), "
-                "③ 품목 감소 확산 반영(10%)"
-            )
-
+            st.info("순위 산정 방식: ① 감소금액 규모(75%) ② 감소 추세/속도(15%) ③ 품목 감소 확산(10%)")
             top_count = max(1, int(np.ceil(len(priority_df) * 0.35)))
             top_priority = priority_df.head(top_count).copy()
 
             st.markdown("### 🎯 매출감소 추이 업체 LIST")
-
             display_cols = [
                 "순위", "거래처", "AI_우선순위점수", "감소규모점수", "추세하락점수", "품목감소점수",
                 "전체_매출액", "전반부_평균매출", "후반부_평균매출", "실제감소액", "하락률(%)", "분석_내역"
@@ -1535,8 +1392,7 @@ with tab5:
             top_items = item_rank.head(top_count).copy()
 
             st.info(
-                "품목 우선순위: 감소금액, 하락률, 감소고객사수, 반품금액, 최근 하락추세를 반영하여 "
-                "상위 35% 품목을 우선 분석합니다."
+                "품목 우선순위: 감소금액, 하락률, 감소고객사수, 반품금액, 최근 하락추세를 반영하여 상위 35% 품목을 우선 분석합니다."
             )
 
             st.markdown("### 1) 감소 품목 우선순위 LIST (상위 35%)")
@@ -1590,13 +1446,13 @@ with tab5:
                         marker=dict(size=8),
                         hovertemplate="월: %{x|%Y-%m}<br>매출: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
                     ))
-                    fig_item.update_layout(
-                        height=380,
-                        yaxis_title="매출액(원)",
-                        yaxis_tickformat=","
-                    )
+                    fig_item.update_layout(height=380, yaxis_title="매출액(원)", yaxis_tickformat=",")
                     fig_item = add_year_month_axis(fig_item, item_month["날짜축"])
-                    st.plotly_chart(fig_item, use_container_width=True)
+                    st.plotly_chart(
+                        fig_item,
+                        use_container_width=True,
+                        key=f"item_monthly_chart_{selected_item}"
+                    )
                 else:
                     st.info("선택 품목의 월별 추이 데이터가 없습니다.")
 
@@ -1633,10 +1489,7 @@ with tab5:
                         0
                     )
 
-                    reason_map = (
-                        build_return_base(q)
-                        .pipe(safe_make_product_label)
-                    )
+                    reason_map = build_return_base(q).pipe(safe_make_product_label)
                     reason_map = reason_map[
                         (reason_map["품목표시"].astype(str) == str(selected_item)) &
                         (reason_map["반품여부_표준"])
@@ -1645,21 +1498,16 @@ with tab5:
                     if not reason_map.empty:
                         reason_by_cust = (
                             reason_map.groupby("거래처", as_index=False)
-                            .agg(
-                                주요반품원인=("반품원인_표준", summarize_return_reason_text)
-                            )
+                            .agg(주요반품원인=("반품원인_표준", summarize_return_reason_text))
                         )
                         cust_summary = cust_summary.merge(reason_by_cust, on="거래처", how="left")
                     else:
                         cust_summary["주요반품원인"] = "반품 없음"
 
                     slope_rows = []
-                    for cust in cust_summary["거래처"].astype(str).tolist():
-                        sub = item_cust[item_cust["거래처"].astype(str) == cust].sort_values("월")
-                        slope_rows.append({
-                            "거래처": cust,
-                            "최근기울기": calc_slope(sub["매출액"].tolist())
-                        })
+                    for cust_name in cust_summary["거래처"].astype(str).tolist():
+                        sub = item_cust[item_cust["거래처"].astype(str) == cust_name].sort_values("월")
+                        slope_rows.append({"거래처": cust_name, "최근기울기": calc_slope(sub["매출액"].tolist())})
                     slope_df = pd.DataFrame(slope_rows)
                     cust_summary = cust_summary.merge(slope_df, on="거래처", how="left")
 
@@ -1673,10 +1521,8 @@ with tab5:
                     cust_summary["순위"] = range(1, len(cust_summary) + 1)
 
                     customer_display_cols = [
-                        "순위", "거래처",
-                        "전반부_평균매출", "후반부_평균매출",
-                        "감소금액", "하락률(%)",
-                        "반품금액", "반품율(%)",
+                        "순위", "거래처", "전반부_평균매출", "후반부_평균매출",
+                        "감소금액", "하락률(%)", "반품금액", "반품율(%)",
                         "주요반품원인", "AI반품분석", "감소원인"
                     ]
                     customer_display_cols = [c for c in customer_display_cols if c in cust_summary.columns]
@@ -1688,9 +1534,7 @@ with tab5:
                         height=None,
                     )
 
-                    customer_options = ["전체"] + sorted(
-                        cust_summary["거래처"].dropna().astype(str).unique().tolist()
-                    )
+                    customer_options = ["전체"] + sorted(cust_summary["거래처"].dropna().astype(str).unique().tolist())
                     selected_customer = st.selectbox(
                         "업체 선택",
                         options=customer_options,
@@ -1724,13 +1568,13 @@ with tab5:
                             marker=dict(size=8),
                             hovertemplate="월: %{x|%Y-%m}<br>매출: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
                         ))
-                        fig_item_customer.update_layout(
-                            height=380,
-                            yaxis_title="매출액(원)",
-                            yaxis_tickformat=","
-                        )
+                        fig_item_customer.update_layout(height=380, yaxis_title="매출액(원)", yaxis_tickformat=",")
                         fig_item_customer = add_year_month_axis(fig_item_customer, selected_customer_month["날짜축"])
-                        st.plotly_chart(fig_item_customer, use_container_width=True)
+                        st.plotly_chart(
+                            fig_item_customer,
+                            use_container_width=True,
+                            key=f"item_customer_monthly_chart_{selected_item}_{selected_customer}"
+                        )
                     else:
                         st.info("선택한 업체의 품목 월별 추이 데이터가 없습니다.")
 
@@ -1746,12 +1590,12 @@ with tab5:
                             marker_color=["#d62728" if v > 0 else "#2ca02c" for v in top_cust["감소금액"]],
                             hovertemplate="거래처: %{x}<br>감소금액: %{y:,.0f}원<extra></extra>",
                         ))
-                        fig_c.update_layout(
-                            height=420,
-                            yaxis_title="감소금액(원)",
-                            yaxis_tickformat=","
+                        fig_c.update_layout(height=420, yaxis_title="감소금액(원)", yaxis_tickformat=",")
+                        st.plotly_chart(
+                            fig_c,
+                            use_container_width=True,
+                            key=f"customer_decline_bar_{selected_item}"
                         )
-                        st.plotly_chart(fig_c, use_container_width=True)
                 else:
                     st.info("업체별 감소현황 데이터가 없습니다.")
 
