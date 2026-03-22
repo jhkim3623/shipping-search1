@@ -48,6 +48,14 @@ div[data-testid="stDataFrame"] {
 # ══════════════════════════════════════════════════════════
 # 공통 유틸
 # ══════════════════════════════════════════════════════════
+def calc_table_height(df, min_rows=3, max_rows=18, row_px=35, header_px=38):
+    if df is None or len(df) == 0:
+        rows = min_rows
+    else:
+        rows = max(min_rows, min(len(df), max_rows))
+    return header_px + rows * row_px
+
+
 def clean_and_safe_display(
     df,
     height=None,
@@ -75,8 +83,9 @@ def clean_and_safe_display(
                 hide_index=True,
                 key=key,
                 disabled=disabled_cols,
+                height=calc_table_height(display_df),
             )
-        st.dataframe(display_df, width="stretch", hide_index=True)
+        st.dataframe(display_df, width="stretch", hide_index=True, height=calc_table_height(display_df))
         return None
 
     for col in display_df.columns:
@@ -128,6 +137,8 @@ def clean_and_safe_display(
         else:
             column_config[col] = st.column_config.TextColumn(col, width="medium", pinned=pinned)
 
+    final_height = height if height is not None else calc_table_height(display_df)
+
     if editable and key:
         safe_editor_df = display_df.copy()
 
@@ -145,7 +156,7 @@ def clean_and_safe_display(
             safe_editor_df,
             column_config=column_config,
             width="stretch",
-            height=height if height else "auto",
+            height=final_height,
             num_rows="fixed",
             key=key,
             hide_index=True,
@@ -156,10 +167,41 @@ def clean_and_safe_display(
         display_df,
         column_config=column_config,
         width="stretch",
-        height=height if height else "auto",
+        height=final_height,
         hide_index=True,
     )
     return None
+
+
+def render_banded_table(df, title=None, text_cols=None, pinned_cols=None, height=None):
+    if title:
+        st.markdown(title)
+
+    if df is None or df.empty:
+        clean_and_safe_display(pd.DataFrame(), height=height, text_cols=text_cols, pinned_cols=pinned_cols)
+        return
+
+    temp = df.copy().reset_index(drop=True)
+    temp.columns = [str(c) for c in temp.columns]
+
+    item_order = temp["품목코드"].astype(str).drop_duplicates().tolist() if "품목코드" in temp.columns else []
+    shade_map = {item: ("rgba(0,0,0,0.04)" if i % 2 == 1 else "transparent") for i, item in enumerate(item_order)}
+
+    def highlight_row(row):
+        key = str(row["품목코드"]) if "품목코드" in row.index else ""
+        bg = shade_map.get(key, "transparent")
+        return [f"background-color: {bg}"] * len(row)
+
+    styled = temp.style.apply(highlight_row, axis=1)
+
+    final_height = height if height is not None else calc_table_height(temp, max_rows=20)
+
+    st.dataframe(
+        styled,
+        width="stretch",
+        height=final_height,
+        hide_index=True,
+    )
 
 
 def sorted_unique(series):
@@ -858,6 +900,12 @@ def build_quote_reference(q_ref):
 
     special_reference = pd.concat(special_rows, ignore_index=True) if special_rows else pd.DataFrame()
 
+    if not special_reference.empty:
+        special_reference = special_reference.sort_values(
+            ["품목코드", "대표구분", "총매출액", "거래처"],
+            ascending=[True, True, False, True]
+        ).reset_index(drop=True)
+
     return overview, representative, special_reference
 
 
@@ -998,7 +1046,6 @@ with tab1:
             g.sort_values(sc) if sc else g,
             pinned_cols=["거래처", "품목코드"],
             text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜"],
-            height=460,
         )
 
 with tab2:
@@ -1037,7 +1084,6 @@ with tab2:
             g2.sort_values(sc) if sc else g2,
             pinned_cols=["품목코드", "거래처"],
             text_cols=["품목코드", "거래처", "최근날짜"],
-            height=460,
         )
 
 with tab3:
@@ -1061,7 +1107,7 @@ with tab3:
         overview_cols = [
             "품목코드", "점착제코드", "점착제명",
             "최저단가", "최고단가", "거래처수", "총출고횟수",
-            "총량_M2", "총매출액", "월평균_출고량", "월평균_매출"
+            "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
         ]
         overview_cols = [c for c in overview_cols if c in overview.columns]
 
@@ -1069,7 +1115,6 @@ with tab3:
             overview[overview_cols],
             pinned_cols=["품목코드"],
             text_cols=["품목코드", "점착제코드", "점착제명"],
-            height=360,
         )
 
         st.markdown("### 2) 업체 성향 AI 분석 기반 대표 레퍼런스")
@@ -1084,7 +1129,6 @@ with tab3:
             rep_ref[rep_cols],
             pinned_cols=["품목코드", "거래처"],
             text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세"],
-            height=520,
         )
 
         st.markdown("### 3) 대표 업체 레퍼런스 확장")
@@ -1095,11 +1139,10 @@ with tab3:
         ]
         special_cols = [c for c in special_cols if c in special_ref.columns]
 
-        clean_and_safe_display(
+        render_banded_table(
             special_ref[special_cols] if not special_ref.empty else pd.DataFrame(columns=special_cols),
-            pinned_cols=["대표구분", "품목코드", "거래처"],
             text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근추세", "AI분석"],
-            height=520,
+            pinned_cols=["대표구분", "품목코드", "거래처"],
         )
 
         st.markdown("### 4) 대표 업체 최근단가 비교")
@@ -1146,7 +1189,6 @@ with tab4:
                 pinned_cols=["순위", "거래처"],
                 text_cols=["거래처", "분석_내역"],
                 disabled_cols=display_cols,
-                height=520,
             )
 
             if edited_priority is not None:
@@ -1165,5 +1207,4 @@ with tab5:
         q[raw_cols],
         pinned_cols=["거래처", "품목코드"],
         text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜", "월"],
-        height=540,
     )
