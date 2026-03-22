@@ -19,12 +19,20 @@ st.markdown("""
 }
 div[data-testid="stHorizontalBlock"] {
     gap: 0.6rem;
+    align-items: stretch;
 }
 div[data-testid="stMetric"] {
     background: #fafafa;
     border: 1px solid #eeeeee;
     border-radius: 10px;
     padding: 0.5rem 0.7rem;
+    min-height: 86px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+div[data-baseweb="select"] > div {
+    min-height: 56px;
 }
 div[data-testid="stDataFrame"] {
     width: 100%;
@@ -62,6 +70,10 @@ div[data-testid="stDataFrame"] {
     }
     .section-title {
         font-size: 1.2rem;
+    }
+    div[data-testid="stMetric"] {
+        min-height: 80px;
+        padding: 0.45rem 0.6rem;
     }
 }
 </style>
@@ -298,7 +310,8 @@ def add_year_month_axis(fig, x_dates):
         tickangle=0,
         title="",
         showgrid=True,
-        zeroline=False
+        zeroline=False,
+        automargin=True
     )
 
     years = sorted(pd.Series(dt).dt.year.unique())
@@ -323,8 +336,34 @@ def add_year_month_axis(fig, x_dates):
             line_color="rgba(120,120,120,0.5)"
         )
 
-    fig.update_layout(margin=dict(b=90))
+    fig.update_layout(margin=dict(l=20, r=40, t=35, b=90))
     return fig
+
+
+def apply_mobile_friendly_line_layout(fig, x_dates, y_title="판매금액(원)", height=380):
+    x_dates = pd.to_datetime(pd.Series(x_dates), errors="coerce").dropna().sort_values()
+    fig.update_traces(cliponaxis=False)
+
+    if len(x_dates) > 0:
+        x_min = x_dates.min() - pd.Timedelta(days=10)
+        x_max = x_dates.max() + pd.Timedelta(days=12)
+    else:
+        x_min = None
+        x_max = None
+
+    fig.update_layout(
+        height=height,
+        yaxis_title=y_title,
+        yaxis_tickformat=",",
+        margin=dict(l=20, r=45, t=35, b=90),
+        xaxis=dict(
+            automargin=True,
+            range=[x_min, x_max] if x_min is not None and x_max is not None else None,
+            fixedrange=False
+        ),
+        yaxis=dict(automargin=True),
+    )
+    return add_year_month_axis(fig, x_dates)
 
 
 def build_month_axis_frame(months):
@@ -540,9 +579,6 @@ def infer_ai_return_analysis(row):
     return " | ".join(reasons)
 
 
-# ══════════════════════════════════════════════════════════
-# 데이터 로드
-# ══════════════════════════════════════════════════════════
 @st.cache_data
 def load_excel(file_bytes):
     xls = pd.ExcelFile(BytesIO(file_bytes))
@@ -682,9 +718,6 @@ def load_excel(file_bytes):
     return rec, alias, prod, adh, cust
 
 
-# ══════════════════════════════════════════════════════════
-# 매출 하락 분석용
-# ══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def build_analysis_cache(q):
     df = q.copy()
@@ -820,9 +853,6 @@ def build_priority_results(monthly_sales, detail_df, all_months):
     return result_df, first_half, last_half
 
 
-# ══════════════════════════════════════════════════════════
-# 견적 레퍼런스
-# ══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def build_quote_reference(q_ref):
     if q_ref is None or q_ref.empty:
@@ -1069,17 +1099,14 @@ def draw_quote_reference_chart(special_df):
 
     fig.update_layout(
         height=460,
-        margin=dict(l=20, r=20, t=30, b=90),
-        xaxis=dict(title="", tickangle=-35),
-        yaxis=dict(title="최근단가(원/M2)", tickformat=",.0f"),
+        margin=dict(l=20, r=45, t=30, b=90),
+        xaxis=dict(title="", tickangle=-35, automargin=True),
+        yaxis=dict(title="최근단가(원/M2)", tickformat=",.0f", automargin=True),
         legend=dict(orientation="h", yanchor="top", y=-0.28, x=0, xanchor="left")
     )
     st.plotly_chart(fig, use_container_width=True, key="quote_reference_chart_main")
 
 
-# ══════════════════════════════════════════════════════════
-# 매출 감소 품목 분석용
-# ══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def build_return_decline_item_analysis(q):
     if q is None or q.empty:
@@ -1613,14 +1640,13 @@ with tab4:
                             hoverinfo="skip",
                         ))
 
-                    fig_total.update_layout(
-                        title="1️⃣ 업체 전체 월별 매출 추이",
-                        height=430,
-                        yaxis_tickformat=",",
-                        yaxis_title="매출액(원)",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02)
+                    fig_total = apply_mobile_friendly_line_layout(
+                        fig_total,
+                        customer_total_monthly["날짜축"],
+                        y_title="매출액(원)",
+                        height=430
                     )
-                    fig_total = add_year_month_axis(fig_total, customer_total_monthly["날짜축"])
+                    fig_total.update_layout(title="1️⃣ 업체 전체 월별 매출 추이")
                     st.plotly_chart(fig_total, use_container_width=True, key=f"tab4_total_{selected_cust_name}")
 
                     top_contrib = contribution_df.head(12).copy()
@@ -1643,7 +1669,10 @@ with tab4:
                             height=450,
                             yaxis_tickformat=",",
                             xaxis_title="품목",
-                            yaxis_title="감소액(원)"
+                            yaxis_title="감소액(원)",
+                            margin=dict(l=20, r=45, t=35, b=120),
+                            xaxis=dict(automargin=True),
+                            yaxis=dict(automargin=True)
                         )
                         st.plotly_chart(fig_contrib, use_container_width=True, key=f"tab4_contrib_{selected_cust_name}")
 
@@ -1674,14 +1703,18 @@ with tab4:
                                 text=sub["만원라벨"],
                                 textposition=pos_map.get(prod_label, "top center"),
                                 textfont=dict(size=9),
+                                cliponaxis=False,
                                 hovertemplate=f"품목: {prod_label}<br>월: %{{x|%Y-%m}}<br>매출: %{{y:,.0f}}원<br>만원단위: %{{text}}<extra></extra>",
                             ))
 
+                        fig_products = apply_mobile_friendly_line_layout(
+                            fig_products,
+                            top_product_monthly["날짜축"],
+                            y_title="매출액(원)",
+                            height=460
+                        )
                         fig_products.update_layout(
                             title="3️⃣ 감소 주도 품목 월별 매출 추이 (Top 5)",
-                            height=460,
-                            yaxis_tickformat=",",
-                            yaxis_title="매출액(원)",
                             legend=dict(
                                 orientation="h",
                                 yanchor="bottom",
@@ -1690,7 +1723,6 @@ with tab4:
                                 xanchor="left"
                             )
                         )
-                        fig_products = add_year_month_axis(fig_products, top_product_monthly["날짜축"])
                         st.plotly_chart(fig_products, use_container_width=True, key=f"tab4_products_{selected_cust_name}")
                         st.caption("※ 각 포인트 값은 만원 단위입니다. 예: 4,500 = 4천5백만원")
 
@@ -1728,6 +1760,7 @@ with tab4:
                                     text=sub["지수라벨"],
                                     textposition=pos_map.get(prod_label, "top center"),
                                     textfont=dict(size=9),
+                                    cliponaxis=False,
                                     hovertemplate=f"품목: {prod_label}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:.1f}}<extra></extra>",
                                     showlegend=True
                                 ))
@@ -1739,10 +1772,14 @@ with tab4:
                                 opacity=0.7
                             )
 
+                            fig_idx = apply_mobile_friendly_line_layout(
+                                fig_idx,
+                                indexed_df["날짜축"],
+                                y_title="지수값",
+                                height=460
+                            )
                             fig_idx.update_layout(
                                 title=f"품목간 매출 규모 차이가 커서 추가 표시 (최대/최소 약 {scale_ratio:.1f}배)",
-                                height=460,
-                                yaxis_title="지수값",
                                 legend=dict(
                                     orientation="h",
                                     yanchor="bottom",
@@ -1751,7 +1788,6 @@ with tab4:
                                     xanchor="left"
                                 )
                             )
-                            fig_idx = add_year_month_axis(fig_idx, indexed_df["날짜축"])
                             st.plotly_chart(fig_idx, use_container_width=True, key=f"tab4_helper_{selected_cust_name}")
 
                     if not contribution_df.empty:
@@ -1779,7 +1815,10 @@ with tab4:
                             height=500,
                             yaxis_tickformat=",",
                             xaxis_title="품목",
-                            yaxis_title="매출액(원)"
+                            yaxis_title="매출액(원)",
+                            margin=dict(l=20, r=45, t=35, b=120),
+                            xaxis=dict(automargin=True),
+                            yaxis=dict(automargin=True)
                         )
                         st.plotly_chart(fig_bar, use_container_width=True, key=f"tab4_compare_{selected_cust_name}")
 
@@ -1849,7 +1888,6 @@ with tab5:
                     c3.metric("하락률", f"{rr['하락률(%)']:.1f}%")
                     c4.metric("반품금액", f"{int(rr['반품금액']):,} 원")
 
-                # 공통 x축 기준 생성
                 common_month_axis = build_month_axis_frame(
                     item_month["월"].unique().tolist() if not item_month.empty else []
                 )
@@ -1872,20 +1910,15 @@ with tab5:
                         name="월매출",
                         line=dict(width=3, color="#1f77b4"),
                         marker=dict(size=8),
+                        cliponaxis=False,
                         hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
                     ))
-                    fig_item.update_layout(
-                        height=380,
-                        yaxis_title="판매금액(원)",
-                        yaxis_tickformat=",",
-                        xaxis=dict(
-                            range=[
-                                common_month_axis["날짜축"].min(),
-                                common_month_axis["날짜축"].max()
-                            ]
-                        )
+                    fig_item = apply_mobile_friendly_line_layout(
+                        fig_item,
+                        common_month_axis["날짜축"],
+                        y_title="판매금액(원)",
+                        height=380
                     )
-                    fig_item = add_year_month_axis(fig_item, common_month_axis["날짜축"])
                     st.plotly_chart(
                         fig_item,
                         use_container_width=True,
@@ -1960,7 +1993,7 @@ with tab5:
                     customer_options = cust_summary.sort_values("순위")["거래처"].dropna().astype(str).str.strip().tolist()
 
                     if len(customer_options) > 0:
-                        left_col, m1, m2, m3 = st.columns([2.4, 1, 1, 1])
+                        left_col, m1, m2, m3 = st.columns([2.9, 1.2, 1.2, 1.2])
 
                         with left_col:
                             selected_customer = st.selectbox(
@@ -2016,20 +2049,15 @@ with tab5:
                                 name=selected_customer,
                                 line=dict(width=3, color="#1f77b4"),
                                 marker=dict(size=8),
+                                cliponaxis=False,
                                 hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
                             ))
-                            fig_item_customer.update_layout(
-                                height=380,
-                                yaxis_title="판매금액(원)",
-                                yaxis_tickformat=",",
-                                xaxis=dict(
-                                    range=[
-                                        common_month_axis["날짜축"].min(),
-                                        common_month_axis["날짜축"].max()
-                                    ]
-                                )
+                            fig_item_customer = apply_mobile_friendly_line_layout(
+                                fig_item_customer,
+                                common_month_axis["날짜축"],
+                                y_title="판매금액(원)",
+                                height=380
                             )
-                            fig_item_customer = add_year_month_axis(fig_item_customer, common_month_axis["날짜축"])
                             st.plotly_chart(
                                 fig_item_customer,
                                 use_container_width=True,
