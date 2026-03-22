@@ -56,6 +56,22 @@ def calc_table_height(df, min_rows=3, max_rows=18, row_px=35, header_px=38):
     return header_px + rows * row_px
 
 
+def safe_make_product_label(df):
+    temp = df.copy()
+    if "품목표시" not in temp.columns:
+        if "품목명(공식)" in temp.columns:
+            temp["품목명(공식)"] = temp["품목명(공식)"].fillna("").astype(str)
+            temp["품목코드"] = temp["품목코드"].astype(str)
+            temp["품목표시"] = np.where(
+                temp["품목명(공식)"].str.strip() != "",
+                temp["품목코드"].astype(str) + " | " + temp["품목명(공식)"].astype(str),
+                temp["품목코드"].astype(str)
+            )
+        else:
+            temp["품목표시"] = temp["품목코드"].astype(str)
+    return temp
+
+
 def clean_and_safe_display(
     df,
     height=None,
@@ -460,6 +476,9 @@ def build_analysis_cache(q):
     df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
     df = df[df["월"].notna() & (df["월"] != "")].copy()
 
+    if "품목코드" not in df.columns:
+        df["품목코드"] = ""
+
     if "품목명(공식)" not in df.columns:
         df["품목명(공식)"] = ""
 
@@ -481,7 +500,7 @@ def build_analysis_cache(q):
     customer_total_monthly["날짜축"] = pd.to_datetime(customer_total_monthly["월"] + "-01")
 
     product_monthly = (
-        df.groupby(["거래처", "품목코드", "품목명(공식)", "품목표시", "월"], dropna=False)["금액(원)"]
+        df.groupby(["거래처", "품목코드", "품목표시", "월"], dropna=False)["금액(원)"]
         .sum()
         .reset_index()
     )
@@ -819,7 +838,6 @@ def draw_quote_reference_chart(special_df):
     color_map = build_color_map(items)
 
     fig = go.Figure()
-
     for item in items:
         sub = chart_df[chart_df["품목코드"].astype(str) == str(item)].copy()
         fig.add_trace(go.Scatter(
@@ -830,7 +848,12 @@ def draw_quote_reference_chart(special_df):
             text=sub["대표구분"],
             textposition="top center",
             marker=dict(size=11, color=color_map[str(item)], line=dict(width=1, color="white")),
-            hovertemplate=(f"품목코드: {item}<br>" "거래처: %{x}<br>" "최근단가: %{y:,.0f}원/M2<br>" "구분: %{text}<extra></extra>")
+            hovertemplate=(
+                f"품목코드: {item}<br>"
+                "거래처: %{x}<br>"
+                "최근단가: %{y:,.0f}원/M2<br>"
+                "구분: %{text}<extra></extra>"
+            )
         ))
 
     fig.update_layout(
@@ -844,7 +867,7 @@ def draw_quote_reference_chart(special_df):
 
 
 # ══════════════════════════════════════════════════════════
-# 매출 하락 상세 시각화 복구
+# 매출 하락 분석 상세
 # ══════════════════════════════════════════════════════════
 def draw_customer_sales_trend(customer_monthly):
     if customer_monthly is None or customer_monthly.empty:
@@ -881,23 +904,23 @@ def draw_decline_product_charts(top_product_monthly):
         st.info("감소 주도 품목 데이터가 없습니다.")
         return
 
-    plot_df = top_product_monthly.copy()
-    plot_df["품목표시"] = plot_df["품목표시"].astype(str)
+    plot_df = safe_make_product_label(top_product_monthly.copy())
     plot_df = plot_df.sort_values(["품목표시", "날짜축"])
     items = plot_df["품목표시"].dropna().astype(str).unique().tolist()
     color_map = build_color_map(items)
 
     fig_main = go.Figure()
+    pos_list = ["top center", "bottom center", "middle right", "middle left"]
+
     for i, item in enumerate(items):
         sub = plot_df[plot_df["품목표시"] == item].copy().sort_values("날짜축")
-        textpos = ["top center", "bottom center", "middle right", "middle left"][i % 4]
         fig_main.add_trace(go.Scatter(
             x=sub["날짜축"],
             y=sub["금액(원)"],
             mode="lines+markers+text",
             name=item,
             text=sub["만원라벨"],
-            textposition=textpos,
+            textposition=pos_list[i % len(pos_list)],
             line=dict(width=3, color=color_map[item]),
             marker=dict(size=8),
             hovertemplate=f"품목: {item}<br>월: %{{x|%Y-%m}}<br>매출: %{{y:,.0f}}원<br>만원: %{{text}}<extra></extra>",
@@ -941,9 +964,22 @@ def draw_decline_product_charts(top_product_monthly):
 
 
 def build_customer_product_summary(detail_df, customer_name, first_half, last_half):
-    cust = detail_df[detail_df["거래처"] == customer_name].copy()
+    if detail_df is None or detail_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    cust = detail_df[detail_df["거래처"].astype(str) == str(customer_name)].copy()
     if cust.empty:
         return pd.DataFrame(), pd.DataFrame()
+
+    cust = safe_make_product_label(cust)
+
+    required_cols = {"품목코드", "품목표시", "월", "금액(원)"}
+    missing = [c for c in required_cols if c not in cust.columns]
+    if missing:
+        return pd.DataFrame(), pd.DataFrame()
+
+    if "날짜축" not in cust.columns:
+        cust["날짜축"] = pd.to_datetime(cust["월"] + "-01", errors="coerce")
 
     product_summary = (
         cust.groupby(["품목코드", "품목표시"], dropna=False)
@@ -962,6 +998,7 @@ def build_customer_product_summary(detail_df, customer_name, first_half, last_ha
         .reset_index()
         .rename(columns={"금액(원)": "전반평균"})
     )
+
     last_prod = (
         cust[cust["월"].isin(last_half)]
         .groupby(["품목코드", "품목표시"], dropna=False)["금액(원)"]
@@ -982,18 +1019,20 @@ def build_customer_product_summary(detail_df, customer_name, first_half, last_ha
     ).round(1)
 
     top_decline = merged.sort_values(["감소액", "총매출액"], ascending=[False, False]).copy()
-    top_decline_monthly = pd.DataFrame()
 
     decline_codes = top_decline[top_decline["감소액"] > 0]["품목코드"].astype(str).head(5).tolist()
-    if len(decline_codes) > 0:
-        top_decline_monthly = cust[cust["품목코드"].astype(str).isin(decline_codes)].copy()
-        top_decline_monthly = (
-            top_decline_monthly.groupby(["품목코드", "품목표시", "월", "날짜축"], dropna=False)["금액(원)"]
-            .sum()
-            .reset_index()
-            .sort_values(["품목표시", "날짜축"])
-        )
-        top_decline_monthly["만원라벨"] = top_decline_monthly["금액(원)"].apply(sales_to_manwon_label)
+    if len(decline_codes) == 0:
+        return merged, pd.DataFrame()
+
+    top_decline_monthly = cust[cust["품목코드"].astype(str).isin(decline_codes)].copy()
+
+    top_decline_monthly = (
+        top_decline_monthly.groupby(["품목코드", "품목표시", "월", "날짜축"], dropna=False)["금액(원)"]
+        .sum()
+        .reset_index()
+        .sort_values(["품목표시", "날짜축"])
+    )
+    top_decline_monthly["만원라벨"] = top_decline_monthly["금액(원)"].apply(sales_to_manwon_label)
 
     return merged, top_decline_monthly
 
@@ -1206,7 +1245,6 @@ with tab4:
             top_priority = priority_df.head(top_count).copy()
 
             st.markdown("### 🎯 매출감소 추이 업체 LIST")
-
             display_cols = [
                 "순위", "거래처", "AI_우선순위점수", "감소규모점수", "통계추세점수", "AI분석점수",
                 "전체_매출액", "전반부_평균매출", "후반부_평균매출", "실제감소액", "하락률(%)", "분석_내역"
@@ -1239,7 +1277,6 @@ with tab4:
             if selected_customer:
                 selected_row = priority_df[priority_df["거래처"].astype(str) == str(selected_customer)].copy()
                 cust_monthly = customer_total_monthly_all[customer_total_monthly_all["거래처"].astype(str) == str(selected_customer)].copy()
-                cust_detail = detail_df[detail_df["거래처"].astype(str) == str(selected_customer)].copy()
 
                 c1, c2, c3, c4 = st.columns(4)
                 if not selected_row.empty:
