@@ -18,59 +18,111 @@ st.markdown("""
     max-width: 100%;
 }
 
-/* 공통 block 정렬 */
+/* 가로 row 정렬 */
 div[data-testid="stHorizontalBlock"] {
-    gap: 0.55rem;
-    align-items: stretch;
+    gap: 0.6rem;
+    align-items: flex-end !important;
 }
 
-/* metric 카드 - 더 얇고 균일하게 */
+/* column 내부 wrapper 높이 안정화 */
+div[data-testid="column"] > div {
+    width: 100% !important;
+}
+
+/* 라벨 공통 */
+label[data-testid="stWidgetLabel"] {
+    margin-bottom: 0.18rem !important;
+    padding-bottom: 0 !important;
+}
+label[data-testid="stWidgetLabel"] p {
+    margin: 0 !important;
+    font-size: 0.78rem !important;
+    line-height: 1.1 !important;
+    color: #4b5563 !important;
+    font-weight: 600 !important;
+}
+
+/* metric box */
 div[data-testid="stMetric"] {
     background: #fafafa;
     border: 1px solid #eeeeee;
     border-radius: 10px;
-    padding: 0.28rem 0.6rem !important;
-    min-height: 58px !important;
-    height: 58px !important;
+    padding: 0.28rem 0.62rem !important;
+    min-height: 56px !important;
+    height: 56px !important;
     display: flex;
     flex-direction: column;
     justify-content: center;
     box-sizing: border-box;
 }
 
-/* metric 내부 라벨/값 폰트 축소 */
+/* metric 내부 */
+div[data-testid="stMetric"] > div {
+    justify-content: center !important;
+}
 div[data-testid="stMetricLabel"] {
-    font-size: 0.72rem !important;
+    font-size: 0.70rem !important;
     line-height: 1.0 !important;
     margin-bottom: 0.08rem !important;
+    color: #6b7280 !important;
 }
 div[data-testid="stMetricValue"] {
-    font-size: 1.02rem !important;
+    font-size: 0.98rem !important;
     line-height: 1.05 !important;
+    color: #111827 !important;
 }
 
-/* select box wrapper 높이 정렬 */
+/* select 공통 wrapper */
 div[data-baseweb="select"] {
-    min-height: 58px !important;
+    min-height: 56px !important;
 }
 div[data-baseweb="select"] > div {
-    min-height: 58px !important;
-    height: 58px !important;
-    align-items: center !important;
+    min-height: 56px !important;
+    height: 56px !important;
     display: flex !important;
+    align-items: center !important;
     box-sizing: border-box !important;
+    border-radius: 10px !important;
 }
 
-/* select 내부 값 세로 가운데 */
-div[data-baseweb="select"] span,
-div[data-baseweb="select"] div {
+/* select 내부 값 세로 중앙 */
+div[data-baseweb="select"] div[class*="valueContainer"] {
+    min-height: 56px !important;
+    display: flex !important;
+    align-items: center !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+div[data-baseweb="select"] div[class*="singleValue"] {
+    display: flex !important;
+    align-items: center !important;
+    color: #111827 !important;
+    font-size: 0.93rem !important;
+    line-height: 1.2 !important;
+}
+div[data-baseweb="select"] input {
+    color: #111827 !important;
+    line-height: 1.2 !important;
+}
+div[data-baseweb="select"] input::placeholder {
+    color: #9ca3af !important;
+    opacity: 1 !important;
+}
+
+/* choose options 복구 */
+div[data-baseweb="select"] div[class*="placeholder"] {
+    color: #9ca3af !important;
+    opacity: 1 !important;
+    font-size: 0.92rem !important;
     line-height: 1.2 !important;
 }
 
-/* select label 간격 최소화 */
-label[data-testid="stWidgetLabel"] p {
-    margin-bottom: 0.15rem !important;
-    font-size: 0.78rem !important;
+/* multiselect tag 정렬 */
+div[data-baseweb="tag"] {
+    display: flex !important;
+    align-items: center !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
 }
 
 /* dataframe */
@@ -96,6 +148,16 @@ div[data-testid="stDataFrame"] {
     margin-bottom: 0.2rem;
 }
 
+/* sidebar multiselect placeholder 복구 */
+section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="placeholder"] {
+    color: #9ca3af !important;
+    opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] input::placeholder {
+    color: #9ca3af !important;
+    opacity: 1 !important;
+}
+
 @media (max-width: 1024px) {
     .block-container {
         padding-left: 0.45rem;
@@ -113,25 +175,26 @@ div[data-testid="stDataFrame"] {
     .section-title {
         font-size: 1.2rem;
     }
-
     div[data-testid="stMetric"] {
-        min-height: 54px !important;
-        height: 54px !important;
-        padding: 0.25rem 0.5rem !important;
+        min-height: 52px !important;
+        height: 52px !important;
+        padding: 0.22rem 0.5rem !important;
     }
     div[data-testid="stMetricLabel"] {
-        font-size: 0.68rem !important;
+        font-size: 0.66rem !important;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 0.92rem !important;
+        font-size: 0.88rem !important;
     }
-
     div[data-baseweb="select"] {
-        min-height: 54px !important;
+        min-height: 52px !important;
     }
     div[data-baseweb="select"] > div {
-        min-height: 54px !important;
-        height: 54px !important;
+        min-height: 52px !important;
+        height: 52px !important;
+    }
+    div[data-baseweb="select"] div[class*="valueContainer"] {
+        min-height: 52px !important;
     }
 }
 </style>
@@ -1335,9 +1398,9 @@ else:
 rec, alias, prod, adh, cust = load_excel(file_bytes)
 
 st.sidebar.header("검색 필터")
-sel_cust = st.sidebar.multiselect("거래처", sorted_unique(rec.get("거래처", pd.Series())))
-sel_prod = st.sidebar.multiselect("품목코드", sorted_unique(rec.get("품목코드", pd.Series())))
-sel_adh = st.sidebar.multiselect("점착제코드", sorted_unique(rec.get("점착제코드", pd.Series())))
+sel_cust = st.sidebar.multiselect("거래처", sorted_unique(rec.get("거래처", pd.Series())), placeholder="Choose options")
+sel_prod = st.sidebar.multiselect("품목코드", sorted_unique(rec.get("품목코드", pd.Series())), placeholder="Choose options")
+sel_adh = st.sidebar.multiselect("점착제코드", sorted_unique(rec.get("점착제코드", pd.Series())), placeholder="Choose options")
 
 date_min = pd.to_datetime(rec["날짜"].min()) if "날짜" in rec.columns else None
 date_max = pd.to_datetime(rec["날짜"].max()) if "날짜" in rec.columns else None
@@ -1926,12 +1989,7 @@ with tab5:
             st.markdown("### 2) 선택 품목별 업체 감소현황")
 
             item_options = top_items["품목표시"].astype(str).tolist()
-
-            # 품목 선택 + metric 박스 동일 톤 정렬
-            left_item, ic1, ic2, ic3, ic4 = st.columns([2.6, 1, 1, 1, 1])
-
-            with left_item:
-                selected_item = st.selectbox("품목 선택", item_options, index=0, key="decline_item_select_v5")
+            selected_item = st.selectbox("품목 선택", item_options, index=0, key="decline_item_select_v5")
 
             if selected_item:
                 item_row = top_items[top_items["품목표시"].astype(str) == str(selected_item)].copy()
@@ -1943,25 +2001,25 @@ with tab5:
                     customer_return_reason_df["품목표시"].astype(str) == str(selected_item)
                 ].copy()
 
+                select_col, c1, c2, c3, c4 = st.columns([2.6, 1, 1, 1, 1])
+
                 if not item_row.empty:
                     rr = item_row.iloc[0]
-                    with ic1:
+                    with select_col:
+                        st.selectbox(
+                            "품목 선택",
+                            options=item_options,
+                            index=item_options.index(selected_item),
+                            key="decline_item_select_top_aligned_v5"
+                        )
+                    with c1:
                         st.metric("품목하락점수", f"{rr['품목하락점수']:.1f}")
-                    with ic2:
+                    with c2:
                         st.metric("감소금액", f"{int(rr['감소금액']):,} 원")
-                    with ic3:
+                    with c3:
                         st.metric("하락률", f"{rr['하락률(%)']:.1f}%")
-                    with ic4:
+                    with c4:
                         st.metric("반품금액", f"{int(rr['반품금액']):,} 원")
-                else:
-                    with ic1:
-                        st.metric("품목하락점수", "-")
-                    with ic2:
-                        st.metric("감소금액", "-")
-                    with ic3:
-                        st.metric("하락률", "-")
-                    with ic4:
-                        st.metric("반품금액", "-")
 
                 common_month_axis = build_month_axis_frame(
                     item_month["월"].unique().tolist() if not item_month.empty else []
@@ -2068,7 +2126,7 @@ with tab5:
                     customer_options = cust_summary.sort_values("순위")["거래처"].dropna().astype(str).str.strip().tolist()
 
                     if len(customer_options) > 0:
-                        left_col, m1, m2, m3 = st.columns([2.8, 1.05, 1.15, 1.05])
+                        left_col, m1, m2, m3 = st.columns([2.9, 1.2, 1.2, 1.2])
 
                         with left_col:
                             selected_customer = st.selectbox(
