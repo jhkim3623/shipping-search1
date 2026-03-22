@@ -76,6 +76,7 @@ def clean_and_safe_display(
     disabled_cols = disabled_cols if disabled_cols is not None else False
 
     if display_df.empty:
+        empty_height = calc_table_height(display_df)
         if editable and key:
             return st.data_editor(
                 display_df,
@@ -83,9 +84,9 @@ def clean_and_safe_display(
                 hide_index=True,
                 key=key,
                 disabled=disabled_cols,
-                height=calc_table_height(display_df),
+                height=empty_height,
             )
-        st.dataframe(display_df, width="stretch", hide_index=True, height=calc_table_height(display_df))
+        st.dataframe(display_df, width="stretch", hide_index=True, height=empty_height)
         return None
 
     for col in display_df.columns:
@@ -127,13 +128,15 @@ def clean_and_safe_display(
 
         if pd.api.types.is_numeric_dtype(display_df[col]):
             if any(k in col for k in ["하락률", "증감률", "비율", "변화율", "CV"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%.1f", pinned=pinned)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
             elif any(k in col for k in ["M2", "수량", "판매량", "총량", "출고량"]):
                 column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
+            elif any(k in col for k in ["단가", "금액", "매출", "총매출", "평균", "원"]):
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned)
             elif any(k in col for k in ["점수", "AI", "우선순위", "통계", "종합"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%.1f", pinned=pinned)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
             else:
-                column_config[col] = st.column_config.NumberColumn(col, format="%,d", pinned=pinned)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned)
         else:
             column_config[col] = st.column_config.TextColumn(col, width="medium", pinned=pinned)
 
@@ -192,7 +195,15 @@ def render_banded_table(df, title=None, text_cols=None, pinned_cols=None, height
         bg = shade_map.get(key, "transparent")
         return [f"background-color: {bg}"] * len(row)
 
-    styled = temp.style.apply(highlight_row, axis=1)
+    styled = temp.style.apply(highlight_row, axis=1).format(
+        {
+            c: "{:,.1f}" for c in temp.columns
+            if any(k in c for k in ["M2", "수량", "판매량", "총량", "출고량"])
+        } | {
+            c: "{:,.0f}" for c in temp.columns
+            if any(k in c for k in ["단가", "금액", "매출", "총매출", "평균", "원"])
+        }
+    )
 
     final_height = height if height is not None else calc_table_height(temp, max_rows=20)
 
@@ -353,9 +364,6 @@ def should_show_helper_chart(top_product_monthly):
     return bool(ratio >= 5), ratio
 
 
-# ══════════════════════════════════════════════════════════
-# 데이터 로드
-# ══════════════════════════════════════════════════════════
 @st.cache_data
 def load_excel(file_bytes):
     xls = pd.ExcelFile(BytesIO(file_bytes))
@@ -497,9 +505,6 @@ def load_excel(file_bytes):
     return rec, alias, prod, adh, cust
 
 
-# ══════════════════════════════════════════════════════════
-# 분석용 사전 계산
-# ══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def build_analysis_cache(q):
     df = q.copy()
@@ -655,9 +660,6 @@ def build_priority_results(monthly_sales, detail_df, all_months):
     return result_df, first_half, last_half
 
 
-# ══════════════════════════════════════════════════════════
-# 견적 레퍼런스 AI 분석
-# ══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def build_quote_reference(q_ref):
     if q_ref.empty:
@@ -1115,6 +1117,7 @@ with tab3:
             overview[overview_cols],
             pinned_cols=["품목코드"],
             text_cols=["품목코드", "점착제코드", "점착제명"],
+            height=None,
         )
 
         st.markdown("### 2) 업체 성향 AI 분석 기반 대표 레퍼런스")
@@ -1129,6 +1132,7 @@ with tab3:
             rep_ref[rep_cols],
             pinned_cols=["품목코드", "거래처"],
             text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세"],
+            height=None,
         )
 
         st.markdown("### 3) 대표 업체 레퍼런스 확장")
@@ -1143,6 +1147,7 @@ with tab3:
             special_ref[special_cols] if not special_ref.empty else pd.DataFrame(columns=special_cols),
             text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근추세", "AI분석"],
             pinned_cols=["대표구분", "품목코드", "거래처"],
+            height=None,
         )
 
         st.markdown("### 4) 대표 업체 최근단가 비교")
