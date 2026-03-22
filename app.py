@@ -195,43 +195,57 @@ def clean_and_safe_display(
     return None
 
 
-def render_banded_table(df, title=None, height=None):
+def render_banded_table(df, title=None, height=None, pinned_cols=None, text_cols=None):
     if title:
         st.markdown(title)
 
     if df is None or df.empty:
-        clean_and_safe_display(pd.DataFrame(), height=height)
+        clean_and_safe_display(
+            pd.DataFrame(),
+            height=height,
+            pinned_cols=pinned_cols,
+            text_cols=text_cols,
+        )
         return
 
     temp = df.copy().reset_index(drop=True)
     temp.columns = [str(c) for c in temp.columns]
 
-    item_order = temp["품목코드"].astype(str).drop_duplicates().tolist() if "품목코드" in temp.columns else []
-    shade_map = {item: ("rgba(0,0,0,0.04)" if i % 2 == 1 else "transparent") for i, item in enumerate(item_order)}
+    if "품목코드" not in temp.columns:
+        clean_and_safe_display(
+            temp,
+            height=height,
+            pinned_cols=pinned_cols,
+            text_cols=text_cols,
+        )
+        return
 
-    def highlight_row(row):
-        key = str(row["품목코드"]) if "품목코드" in row.index else ""
-        bg = shade_map.get(key, "transparent")
-        return [f"background-color: {bg}"] * len(row)
+    item_order = temp["품목코드"].astype(str).fillna("").drop_duplicates().tolist()
+    shade_map = {
+        item: ("background-color: rgba(0,0,0,0.04);" if i % 2 == 1 else "")
+        for i, item in enumerate(item_order)
+    }
 
-    styled = temp.style.apply(highlight_row, axis=1).format(
-        {
-            c: "{:,.1f}" for c in temp.columns
-            if any(k in c for k in ["M2", "수량", "판매량", "총량", "출고량"])
-        } | {
-            c: "{:,.0f}" for c in temp.columns
-            if any(k in c for k in ["단가", "금액", "매출", "총매출", "평균", "원"])
-        }
-    )
+    def _row_style(row):
+        key = str(row.get("품목코드", ""))
+        return [shade_map.get(key, "")] * len(row)
+
+    styled = temp.style.apply(_row_style, axis=1)
+
+    num_format = {}
+    for c in temp.columns:
+        if any(k in c for k in ["M2", "수량", "판매량", "총량", "출고량"]):
+            num_format[c] = "{:,.1f}"
+        elif any(k in c for k in ["단가", "금액", "매출", "총매출", "평균", "원"]):
+            num_format[c] = "{:,.0f}"
+        elif any(k in c for k in ["하락률", "증감률", "비율", "변화율", "CV", "점수"]):
+            num_format[c] = "{:,.1f}"
+
+    if num_format:
+        styled = styled.format(num_format)
 
     final_height = height if height is not None else calc_table_height(temp, max_rows=20)
-
-    st.dataframe(
-        styled,
-        width="stretch",
-        height=final_height,
-        hide_index=True,
-    )
+    st.dataframe(styled, width="stretch", height=final_height, hide_index=True)
 
 
 def sorted_unique(series):
@@ -641,6 +655,9 @@ def build_quote_reference(q_ref):
     if "품목명(공식)" not in df.columns:
         df["품목명(공식)"] = ""
 
+    if "품목코드" not in df.columns or "거래처" not in df.columns:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
     df["품목코드"] = df["품목코드"].astype(str)
     df["거래처"] = df["거래처"].astype(str)
     df["품목명(공식)"] = df["품목명(공식)"].fillna("").astype(str)
@@ -884,6 +901,10 @@ def draw_quote_reference_chart(special_df):
         return
 
     chart_df = special_df.copy()
+    if "품목코드" not in chart_df.columns or "거래처" not in chart_df.columns or "최근단가" not in chart_df.columns:
+        st.info("차트에 필요한 컬럼이 부족합니다.")
+        return
+
     items = chart_df["품목코드"].astype(str).unique().tolist()
     color_map = build_color_map(items)
 
@@ -896,7 +917,7 @@ def draw_quote_reference_chart(special_df):
             y=sub["최근단가"],
             mode="markers+text",
             name=str(item),
-            text=sub["대표구분"],
+            text=sub["대표구분"] if "대표구분" in sub.columns else "",
             textposition="top center",
             marker=dict(
                 size=11,
@@ -969,6 +990,9 @@ def build_customer_product_summary(detail_df, customer_name, first_half, last_ha
         return pd.DataFrame(), pd.DataFrame()
 
     cust = safe_make_product_label(cust)
+
+    if "월" not in cust.columns:
+        return pd.DataFrame(), pd.DataFrame()
 
     if "날짜축" not in cust.columns:
         cust["날짜축"] = pd.to_datetime(cust["월"].astype(str) + "-01", errors="coerce")
@@ -1275,8 +1299,8 @@ with tab3:
 
         render_banded_table(
             special_ref[special_cols] if not special_ref.empty else pd.DataFrame(columns=special_cols),
-            text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근추세", "AI분석"],
             pinned_cols=["대표구분", "품목코드", "거래처"],
+            text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근추세", "AI분석"],
             height=None,
         )
 
