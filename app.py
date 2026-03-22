@@ -518,7 +518,6 @@ def build_priority_results(monthly_sales, detail_df, all_months):
     if base_df.empty:
         return base_df, first_half, last_half
 
-    # 요청 구조 유지: 60 / 20 / 20
     amount_component = scale_to_100(base_df["실제감소액"]) * 0.7 + scale_to_100(base_df["하락률(%)"]) * 0.3
     base_df["감소규모점수"] = amount_component * 0.60
 
@@ -975,9 +974,6 @@ with tab4:
 
                         if show_helper:
                             st.markdown("#### 3-1) 변화율 보조 그래프")
-                            st.markdown("**대상 품목**")
-                            for item in top_products:
-                                st.write(f"- {item}")
 
                             indexed_df = make_indexed_series(
                                 top_product_monthly,
@@ -1009,7 +1005,7 @@ with tab4:
                                     textposition=pos_map.get(prod_label, "top center"),
                                     textfont=dict(size=9),
                                     hovertemplate=f"품목: {prod_label}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:.1f}}<extra></extra>",
-                                    showlegend=False
+                                    showlegend=True
                                 ))
 
                             fig_idx.add_hline(
@@ -1021,8 +1017,15 @@ with tab4:
 
                             fig_idx.update_layout(
                                 title=f"품목간 매출 규모 차이가 커서 추가 표시 (최대/최소 약 {scale_ratio:.1f}배)",
-                                height=420,
+                                height=460,
                                 yaxis_title="지수값",
+                                legend=dict(
+                                    orientation="h",
+                                    yanchor="bottom",
+                                    y=-0.35,
+                                    x=0,
+                                    xanchor="left"
+                                )
                             )
                             fig_idx = add_year_month_axis(fig_idx, indexed_df["날짜축"])
                             st.plotly_chart(fig_idx, use_container_width=True)
