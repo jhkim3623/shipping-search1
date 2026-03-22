@@ -3,7 +3,6 @@ from io import BytesIO
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -40,7 +39,6 @@ def clean_and_safe_display(
                 hide_index=True,
                 key=key,
                 disabled=disabled_cols,
-                placeholder="",
             )
         st.dataframe(display_df, width="stretch", hide_index=True)
         return None
@@ -82,7 +80,7 @@ def clean_and_safe_display(
             continue
 
         if pd.api.types.is_numeric_dtype(display_df[col]):
-            if any(k in col for k in ["하락률", "증감률", "비율", "변화율"]):
+            if any(k in col for k in ["하락률", "증감률", "비율", "변화율", "CV"]):
                 column_config[col] = st.column_config.NumberColumn(
                     col, format="%.1f", pinned=pinned
                 )
@@ -219,22 +217,41 @@ def make_indexed_series(df, group_col, value_col, time_col):
     return temp.groupby(group_col, group_keys=False).apply(_calc)
 
 
-def add_point_labels_to_px_figure(fig, df, series_col, x_col, y_col, text_col):
-    traces = list(fig.data)
-    for tr in traces:
-        series_name = str(tr.name)
-        sub = df[df[series_col].astype(str) == series_name].copy()
-        if sub.empty:
-            continue
-        sub = sub.sort_values(x_col)
-        tr.update(
-            mode="lines+markers+text",
-            text=sub[text_col].tolist(),
-            textfont=dict(size=10),
-            textposition="top center",
-            hovertemplate=f"{series_col}: {series_name}<br>월: %{{x}}<br>매출: %{{y:,.0f}}원<br>만원단위: %{{text}}<extra></extra>",
-        )
-    return fig
+def calc_cv(series):
+    s = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
+    if len(s) == 0:
+        return 0.0
+    m = s.mean()
+    if m == 0 or pd.isna(m):
+        return 0.0
+    return float(s.std(ddof=0) / m)
+
+
+def should_show_helper_chart(top_product_monthly):
+    """
+    품목간 매출 스케일 차이가 큰 경우만 보조 그래프 표시
+    """
+    if top_product_monthly is None or top_product_monthly.empty:
+        return False, 0.0
+
+    temp = (
+        top_product_monthly.groupby("품목코드", as_index=False)["금액(원)"]
+        .sum()
+        .rename(columns={"금액(원)": "총매출"})
+    )
+
+    temp = temp[temp["총매출"] > 0].copy()
+    if len(temp) < 2:
+        return False, 0.0
+
+    max_v = temp["총매출"].max()
+    min_v = temp["총매출"].min()
+
+    if min_v <= 0:
+        return True, np.inf
+
+    ratio = max_v / min_v
+    return bool(ratio >= 5), ratio
 
 
 @st.cache_data
@@ -293,11 +310,11 @@ def load_excel(file_bytes):
 
     def map_alias(series, alias_df, typ):
         if alias_df is None or alias_df.empty or series is None:
-            return pd.Series([None] * len(series))
+            return pd.Series([None] * len(series), index=series.index)
 
         df = alias_df.copy()
         if not {"유형", "별칭", "공식코드"} <= set(df.columns):
-            return pd.Series([None] * len(series))
+            return pd.Series([None] * len(series), index=series.index)
 
         df = df[df["유형"].astype(str) == typ].dropna(subset=["별칭", "공식코드"])
         al = df["별칭"].astype(str).str.strip().tolist()
@@ -309,7 +326,7 @@ def load_excel(file_bytes):
             if m is None:
                 m = next((c for a, c in zip(al, cl) if a and a in v), None)
             out.append(m)
-        return pd.Series(out)
+        return pd.Series(out, index=series.index)
 
     for col, typ in [("품목코드", "품목"), ("점착제코드", "점착제")]:
         src = "품목명_고객표현" if typ == "품목" else "점착제_고객표현"
@@ -431,9 +448,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 
-# ══════════════════════════════════════════════════════════
-# TAB 1
-# ══════════════════════════════════════════════════════════
 with tab1:
     st.subheader("거래처별 → 품목별 출고 이력/최근 단가/가로폭")
 
@@ -474,9 +488,6 @@ with tab1:
         )
 
 
-# ══════════════════════════════════════════════════════════
-# TAB 2
-# ══════════════════════════════════════════════════════════
 with tab2:
     st.subheader("품목별 → 거래처별 출고 이력/총량/단가/매출")
 
@@ -516,9 +527,6 @@ with tab2:
         )
 
 
-# ══════════════════════════════════════════════════════════
-# TAB 3
-# ══════════════════════════════════════════════════════════
 with tab3:
     st.subheader("🏷️ 견적 레퍼런스 — 기준 견적가 & 판매 동향")
 
@@ -553,9 +561,6 @@ with tab3:
         )
 
 
-# ══════════════════════════════════════════════════════════
-# TAB 4
-# ══════════════════════════════════════════════════════════
 with tab4:
     st.subheader("📉 AI 기반 매출 하락 업체 분석")
     st.caption("감소규모 60% + 통계추세 20% + AI분석 20%")
@@ -579,8 +584,8 @@ with tab4:
             monthly_sales = decline_df.groupby(["거래처", "월"], dropna=False)["금액(원)"].sum().reset_index()
 
             all_decline_amounts = []
-            for cust in monthly_sales["거래처"].unique():
-                cust_monthly = monthly_sales[monthly_sales["거래처"] == cust]
+            for cust_name in monthly_sales["거래처"].unique():
+                cust_monthly = monthly_sales[monthly_sales["거래처"] == cust_name]
                 first_data = cust_monthly[cust_monthly["월"].isin(first_half)]["금액(원)"]
                 last_data = cust_monthly[cust_monthly["월"].isin(last_half)]["금액(원)"]
                 avg_first = float(first_data.mean()) if len(first_data) > 0 else 0.0
@@ -590,7 +595,7 @@ with tab4:
 
             max_decline_amount = max(all_decline_amounts) if all_decline_amounts else 0.0
 
-            def calculate_priority_score(cust, cust_monthly, all_cust_data):
+            def calculate_priority_score(cust_name, cust_monthly, all_cust_data):
                 cust_monthly = cust_monthly.sort_values("월").copy()
 
                 first_data = cust_monthly[cust_monthly["월"].isin(first_half)]["금액(원)"]
@@ -629,7 +634,7 @@ with tab4:
                     stat_score = 0.0
 
                 if "품목코드" in all_cust_data.columns:
-                    cust_detail = all_cust_data[all_cust_data["거래처"] == cust].copy()
+                    cust_detail = all_cust_data[all_cust_data["거래처"] == cust_name].copy()
                     first_products = cust_detail[cust_detail["월"].isin(first_half)]["품목코드"].nunique()
                     last_products = cust_detail[cust_detail["월"].isin(last_half)]["품목코드"].nunique()
                     product_decline = max(0, first_products - last_products)
@@ -660,7 +665,7 @@ with tab4:
                 )
 
                 return {
-                    "거래처": str(cust),
+                    "거래처": str(cust_name),
                     "전반부_평균매출": int(round(avg_first, 0)),
                     "후반부_평균매출": int(round(avg_last, 0)),
                     "실제감소액": int(round(decline_amount, 0)),
@@ -675,9 +680,9 @@ with tab4:
                 }
 
             analysis_results = []
-            for cust in monthly_sales["거래처"].unique():
-                cust_monthly = monthly_sales[monthly_sales["거래처"] == cust]
-                result = calculate_priority_score(cust, cust_monthly, decline_df)
+            for cust_name in monthly_sales["거래처"].unique():
+                cust_monthly = monthly_sales[monthly_sales["거래처"] == cust_name]
+                result = calculate_priority_score(cust_name, cust_monthly, decline_df)
                 if result["실제감소액"] > 0:
                     analysis_results.append(result)
 
@@ -773,13 +778,19 @@ with tab4:
                             last_avg = float(np.mean(last_vals)) if len(last_vals) > 0 else 0.0
                             decline_amt = first_avg - last_avg
 
+                            monthly_vals = product_monthly[
+                                product_monthly["품목코드"].astype(str) == str(prod_code)
+                            ].sort_values("월")["금액(원)"]
+
                             contribution_rows.append({
                                 "품목코드": str(prod_code),
                                 "전반부_평균": int(round(first_avg, 0)),
                                 "후반부_평균": int(round(last_avg, 0)),
                                 "감소액": int(round(decline_amt, 0)),
                                 "변화액": int(round(last_avg - first_avg, 0)),
-                                "변화율(%)": round(((last_avg - first_avg) / first_avg) * 100, 1) if first_avg > 0 else 0.0
+                                "변화율(%)": round(((last_avg - first_avg) / first_avg) * 100, 1) if first_avg > 0 else 0.0,
+                                "총매출": int(round(row.sum(), 0)),
+                                "CV": round(calc_cv(monthly_vals), 3),
                             })
 
                         contribution_df = pd.DataFrame(contribution_rows)
@@ -792,12 +803,50 @@ with tab4:
                             text_cols=["품목코드"]
                         )
 
+                        st.markdown("### 📌 품목 분류 요약")
+                        c1, c2, c3 = st.columns(3)
+
+                        with c1:
+                            st.markdown("**상위 매출 품목**")
+                            top_sales_items = contribution_df.sort_values(
+                                ["총매출", "감소액"], ascending=[False, False]
+                            ).head(5)[["품목코드", "총매출", "감소액", "CV"]]
+                            clean_and_safe_display(
+                                top_sales_items,
+                                height=260,
+                                pinned_cols=["품목코드"],
+                                text_cols=["품목코드"]
+                            )
+
+                        with c2:
+                            st.markdown("**변동이 큰 품목**")
+                            high_var_items = contribution_df.sort_values(
+                                ["CV", "총매출"], ascending=[False, False]
+                            ).head(5)[["품목코드", "CV", "총매출", "감소액"]]
+                            clean_and_safe_display(
+                                high_var_items,
+                                height=260,
+                                pinned_cols=["품목코드"],
+                                text_cols=["품목코드"]
+                            )
+
+                        with c3:
+                            st.markdown("**변동이 작은 품목**")
+                            low_var_items = contribution_df.sort_values(
+                                ["CV", "총매출"], ascending=[True, False]
+                            ).head(5)[["품목코드", "CV", "총매출", "감소액"]]
+                            clean_and_safe_display(
+                                low_var_items,
+                                height=260,
+                                pinned_cols=["품목코드"],
+                                text_cols=["품목코드"]
+                            )
+
                         st.markdown("---")
                         st.markdown("### 📈 영업용 시각화")
 
                         # 1) 업체 전체 월별 매출 추이
                         fig_total = go.Figure()
-
                         fig_total.add_trace(go.Scatter(
                             x=customer_total_monthly["날짜축"],
                             y=customer_total_monthly["금액(원)"],
@@ -860,7 +909,7 @@ with tab4:
                             )
                             st.plotly_chart(fig_contrib, use_container_width=True)
 
-                        # 3) 감소 주도 품목 월별 추이 + 금액 라벨
+                        # 3) 감소 주도 품목 월별 추이
                         top_products = contribution_df.head(5)["품목코드"].astype(str).tolist()
                         top_product_monthly = product_monthly[
                             product_monthly["품목코드"].astype(str).isin(top_products)
@@ -902,61 +951,61 @@ with tab4:
                             )
                             fig_products = add_year_month_axis(fig_products, top_product_monthly["날짜축"])
                             st.plotly_chart(fig_products, use_container_width=True)
-
                             st.caption("※ 각 포인트 값은 만원 단위입니다. 예: 4,500 = 4천5백만원")
 
-                            # 3-1) 보조 그래프: 첫 달=100 지수화
-                            st.markdown("#### 3-1) 변화율 보조 그래프 (첫 달=100 기준)")
-                            st.caption("금액 차이가 큰 품목이 함께 있을 때, 작은 금액 품목의 변화 추세도 잘 보이도록 지수화했습니다.")
+                            # 조건부 보조 그래프
+                            show_helper, scale_ratio = should_show_helper_chart(top_product_monthly)
 
-                            indexed_df = make_indexed_series(
-                                top_product_monthly,
-                                group_col="품목코드",
-                                value_col="금액(원)",
-                                time_col="날짜축"
-                            )
-                            indexed_df["지수라벨"] = indexed_df["지수값"].apply(
-                                lambda v: "" if pd.isna(v) else f"{v:.0f}"
-                            )
+                            if show_helper:
+                                st.markdown("#### 3-1) 변화율 보조 그래프")
+                                indexed_df = make_indexed_series(
+                                    top_product_monthly,
+                                    group_col="품목코드",
+                                    value_col="금액(원)",
+                                    time_col="날짜축"
+                                )
+                                indexed_df["지수라벨"] = indexed_df["지수값"].apply(
+                                    lambda v: "" if pd.isna(v) else f"{v:.0f}"
+                                )
 
-                            fig_idx = go.Figure()
-                            for prod_code in top_products:
-                                sub = indexed_df[
-                                    indexed_df["품목코드"].astype(str) == str(prod_code)
-                                ].sort_values("날짜축").copy()
+                                fig_idx = go.Figure()
+                                for prod_code in top_products:
+                                    sub = indexed_df[
+                                        indexed_df["품목코드"].astype(str) == str(prod_code)
+                                    ].sort_values("날짜축").copy()
 
-                                if sub.empty:
-                                    continue
+                                    if sub.empty:
+                                        continue
 
-                                fig_idx.add_trace(go.Scatter(
-                                    x=sub["날짜축"],
-                                    y=sub["지수값"],
-                                    mode="lines+markers+text",
-                                    name=prod_code,
-                                    line=dict(width=2),
-                                    marker=dict(size=7),
-                                    text=sub["지수라벨"],
-                                    textposition=pos_map.get(prod_code, "top center"),
-                                    textfont=dict(size=9),
-                                    hovertemplate=f"품목코드: {prod_code}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:.1f}}<br>(첫 달=100)<extra></extra>",
-                                    showlegend=False
-                                ))
+                                    fig_idx.add_trace(go.Scatter(
+                                        x=sub["날짜축"],
+                                        y=sub["지수값"],
+                                        mode="lines+markers+text",
+                                        name=prod_code,
+                                        line=dict(width=2),
+                                        marker=dict(size=7),
+                                        text=sub["지수라벨"],
+                                        textposition=pos_map.get(prod_code, "top center"),
+                                        textfont=dict(size=9),
+                                        hovertemplate=f"품목코드: {prod_code}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:.1f}}<extra></extra>",
+                                        showlegend=False
+                                    ))
 
-                            fig_idx.add_hline(
-                                y=100,
-                                line_dash="dash",
-                                line_color="gray",
-                                opacity=0.7
-                            )
+                                fig_idx.add_hline(
+                                    y=100,
+                                    line_dash="dash",
+                                    line_color="gray",
+                                    opacity=0.7
+                                )
 
-                            fig_idx.update_layout(
-                                title="작은 금액 품목까지 추세 비교가 잘 보이는 보조 그래프",
-                                height=420,
-                                yaxis_title="지수(첫 달=100)",
-                                legend=dict(orientation="h", yanchor="bottom", y=-0.25)
-                            )
-                            fig_idx = add_year_month_axis(fig_idx, indexed_df["날짜축"])
-                            st.plotly_chart(fig_idx, use_container_width=True)
+                                fig_idx.update_layout(
+                                    title=f"품목간 매출 규모 차이가 커서 추가 표시 (최대/최소 약 {scale_ratio:.1f}배)",
+                                    height=420,
+                                    yaxis_title="지수값",
+                                    legend=dict(orientation="h", yanchor="bottom", y=-0.25)
+                                )
+                                fig_idx = add_year_month_axis(fig_idx, indexed_df["날짜축"])
+                                st.plotly_chart(fig_idx, use_container_width=True)
 
                         # 4) 전반부 vs 후반부 비교
                         if not contribution_df.empty:
@@ -989,9 +1038,6 @@ with tab4:
                             st.plotly_chart(fig_bar, use_container_width=True)
 
 
-# ══════════════════════════════════════════════════════════
-# TAB 5
-# ══════════════════════════════════════════════════════════
 with tab5:
     st.subheader("원자료(필터 적용됨)")
     clean_and_safe_display(
