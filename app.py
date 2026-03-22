@@ -1005,6 +1005,8 @@ def build_return_decline_item_analysis(q):
             "item_rank": pd.DataFrame(),
             "item_monthly": pd.DataFrame(),
             "item_customer_monthly": pd.DataFrame(),
+            "return_reason_df": pd.DataFrame(),
+            "customer_return_reason_df": pd.DataFrame(),
         }
 
     mid_idx = len(all_months) // 2
@@ -1045,6 +1047,16 @@ def build_return_decline_item_analysis(q):
             주요반품원인=("반품원인_표준", summarize_return_reason_text),
         )
     )
+    if not return_reason_df.empty:
+        return_reason_df["거래처"] = return_reason_df["거래처"].astype(str).str.strip()
+
+    customer_return_reason_df = (
+        df[df["반품여부_표준"]]
+        .groupby(["품목표시", "거래처"], as_index=False)
+        .agg(주요반품원인=("반품원인_표준", summarize_return_reason_text))
+    )
+    if not customer_return_reason_df.empty:
+        customer_return_reason_df["거래처"] = customer_return_reason_df["거래처"].astype(str).str.strip()
 
     rows = []
     for (prod_code, prod_label), g in item_monthly.groupby(["품목코드", "품목표시"]):
@@ -1121,6 +1133,7 @@ def build_return_decline_item_analysis(q):
         "item_monthly": item_monthly,
         "item_customer_monthly": item_customer_monthly,
         "return_reason_df": return_reason_df,
+        "customer_return_reason_df": customer_return_reason_df,
     }
 
 
@@ -1386,6 +1399,7 @@ with tab5:
         item_monthly = pack.get("item_monthly", pd.DataFrame())
         item_customer_monthly = pack.get("item_customer_monthly", pd.DataFrame())
         return_reason_df = pack.get("return_reason_df", pd.DataFrame())
+        customer_return_reason_df = pack.get("customer_return_reason_df", pd.DataFrame())
         first_half = pack.get("first_half", [])
         last_half = pack.get("last_half", [])
 
@@ -1427,6 +1441,9 @@ with tab5:
                 item_cust = item_customer_monthly[item_customer_monthly["품목표시"].astype(str) == str(selected_item)].copy()
                 item_cust["거래처"] = item_cust["거래처"].astype(str).str.strip()
                 item_return = return_reason_df[return_reason_df["품목표시"].astype(str) == str(selected_item)].copy()
+                reason_by_customer = customer_return_reason_df[
+                    customer_return_reason_df["품목표시"].astype(str) == str(selected_item)
+                ].copy()
 
                 c1, c2, c3, c4 = st.columns(4)
                 if not item_row.empty:
@@ -1464,7 +1481,6 @@ with tab5:
                 else:
                     st.info("선택 품목의 월별 추이 데이터가 없습니다.")
 
-                st.markdown("#### 업체별 감소현황 Data")
                 if not item_cust.empty:
                     first_c = (
                         item_cust[item_cust["월"].isin(first_half)]
@@ -1498,28 +1514,25 @@ with tab5:
                         0
                     )
 
-                    reason_map = build_return_base(q).pipe(safe_make_product_label)
-                    reason_map["거래처"] = reason_map["거래처"].astype(str).str.strip()
-                    reason_map = reason_map[
-                        (reason_map["품목표시"].astype(str) == str(selected_item)) &
-                        (reason_map["반품여부_표준"])
-                    ].copy()
-
-                    if not reason_map.empty:
-                        reason_by_cust = (
-                            reason_map.groupby("거래처", as_index=False)
-                            .agg(주요반품원인=("반품원인_표준", summarize_return_reason_text))
+                    if not reason_by_customer.empty:
+                        reason_by_customer["거래처"] = reason_by_customer["거래처"].astype(str).str.strip()
+                        cust_summary = cust_summary.merge(
+                            reason_by_customer[["거래처", "주요반품원인"]].drop_duplicates(),
+                            on="거래처",
+                            how="left"
                         )
-                        cust_summary = cust_summary.merge(reason_by_cust, on="거래처", how="left")
                     else:
-                        cust_summary["주요반품원인"] = "반품 없음"
+                        cust_summary["주요반품원인"] = np.nan
 
-                    slope_rows = []
-                    for cust_name in cust_summary["거래처"].astype(str).tolist():
-                        sub = item_cust[item_cust["거래처"].astype(str).str.strip() == cust_name].sort_values("월")
-                        slope_rows.append({"거래처": cust_name, "최근기울기": calc_slope(sub["매출액"].tolist())})
-                    slope_df = pd.DataFrame(slope_rows)
-                    cust_summary = cust_summary.merge(slope_df, on="거래처", how="left")
+                    cust_summary["주요반품원인"] = cust_summary["주요반품원인"].fillna("반품 없음")
+
+                    slope_map = (
+                        item_cust.sort_values(["거래처", "월"])
+                        .groupby("거래처")["매출액"]
+                        .apply(lambda s: calc_slope(s.tolist()))
+                        .reset_index(name="최근기울기")
+                    )
+                    cust_summary = cust_summary.merge(slope_map, on="거래처", how="left")
 
                     cust_summary["감소원인"] = cust_summary.apply(infer_customer_item_decline_reason, axis=1)
                     cust_summary["AI반품분석"] = cust_summary.apply(infer_ai_return_analysis, axis=1)
@@ -1530,44 +1543,12 @@ with tab5:
                     ).reset_index(drop=True)
                     cust_summary["순위"] = range(1, len(cust_summary) + 1)
 
-                    customer_display_cols = [
-                        "순위", "거래처", "전반부_평균매출", "후반부_평균매출",
-                        "감소금액", "하락률(%)", "반품금액", "반품율(%)",
-                        "주요반품원인", "AI반품분석", "감소원인"
-                    ]
-                    customer_display_cols = [c for c in customer_display_cols if c in cust_summary.columns]
-
-                    clean_and_safe_display(
-                        cust_summary[customer_display_cols],
-                        pinned_cols=["순위", "거래처"],
-                        text_cols=["거래처", "주요반품원인", "AI반품분석", "감소원인"],
-                        height=None,
-                    )
-
-                    st.markdown("#### 품목 반품 원인 요약")
-                    if item_return.empty:
-                        st.info("해당 품목의 반품 데이터가 없습니다.")
-                    else:
-                        item_return_sorted = item_return.copy()
-                        item_return_sorted["거래처"] = item_return_sorted["거래처"].astype(str).str.strip()
-                        if "반품금액" in item_return_sorted.columns:
-                            item_return_sorted["반품금액"] = pd.to_numeric(item_return_sorted["반품금액"], errors="coerce").fillna(0)
-                            item_return_sorted = item_return_sorted.sort_values(
-                                ["반품금액", "반품수량", "거래처"],
-                                ascending=[False, False, True]
-                            ).reset_index(drop=True)
-
-                        clean_and_safe_display(
-                            item_return_sorted[["거래처", "반품금액", "반품수량", "주요반품원인"]],
-                            text_cols=["거래처", "주요반품원인"],
-                            height=None,
-                        )
-
+                    # 1) 업체별 월판매 현황 + 그래프를 품목 반품 원인 요약 위로 이동
                     st.markdown("#### 업체별 월판매 현황")
                     customer_options = cust_summary.sort_values("순위")["거래처"].dropna().astype(str).str.strip().tolist()
 
                     if len(customer_options) > 0:
-                        left_col, m1, m2, m3 = st.columns([2.2, 1, 1, 1])
+                        left_col, m1, m2, m3 = st.columns([2.4, 1, 1, 1])
 
                         with left_col:
                             selected_customer = st.selectbox(
@@ -1578,25 +1559,27 @@ with tab5:
                             )
 
                         selected_customer = str(selected_customer).strip()
-                        selected_row = cust_summary[cust_summary["거래처"].astype(str).str.strip() == selected_customer].copy()
+                        selected_row = cust_summary[
+                            cust_summary["거래처"].astype(str).str.strip() == selected_customer
+                        ].copy()
 
                         if not selected_row.empty:
                             sr = selected_row.iloc[0]
                             with m1:
-                                st.metric("현재 순위", f"{int(sr['순위'])}")
+                                st.metric("순위", f"{int(sr['순위'])}")
                             with m2:
                                 st.metric("감소금액", f"{int(sr['감소금액']):,} 원")
                             with m3:
                                 st.metric("반품금액", f"{int(sr['반품금액']):,} 원")
                         else:
                             with m1:
-                                st.metric("현재 순위", "-")
+                                st.metric("순위", "-")
                             with m2:
                                 st.metric("감소금액", "-")
                             with m3:
                                 st.metric("반품금액", "-")
 
-                        st.markdown("#### 선택 업체의 해당 품목 월별 판매금액 추이")
+                        st.markdown(f"#### {selected_item} 월별 판매 추이")
 
                         selected_customer_month = item_cust.copy()
                         selected_customer_month["거래처"] = selected_customer_month["거래처"].astype(str).str.strip()
@@ -1630,7 +1613,6 @@ with tab5:
                             ))
                             fig_item_customer.update_layout(
                                 height=380,
-                                title=f"{selected_customer} - 해당 품목 월별 판매금액 추이",
                                 yaxis_title="판매금액(원)",
                                 yaxis_tickformat=","
                             )
@@ -1644,6 +1626,40 @@ with tab5:
                             st.info("선택한 업체의 해당 품목 판매금액 월별 데이터가 없습니다.")
                     else:
                         st.info("선택 가능한 업체가 없습니다.")
+
+                    st.markdown("#### 업체별 감소현황 Data")
+                    customer_display_cols = [
+                        "순위", "거래처", "전반부_평균매출", "후반부_평균매출",
+                        "감소금액", "하락률(%)", "반품금액", "반품율(%)",
+                        "주요반품원인", "AI반품분석", "감소원인"
+                    ]
+                    customer_display_cols = [c for c in customer_display_cols if c in cust_summary.columns]
+
+                    clean_and_safe_display(
+                        cust_summary[customer_display_cols],
+                        pinned_cols=["순위", "거래처"],
+                        text_cols=["거래처", "주요반품원인", "AI반품분석", "감소원인"],
+                        height=None,
+                    )
+
+                    st.markdown("#### 품목 반품 원인 요약")
+                    if item_return.empty:
+                        st.info("해당 품목의 반품 데이터가 없습니다.")
+                    else:
+                        item_return_sorted = item_return.copy()
+                        item_return_sorted["거래처"] = item_return_sorted["거래처"].astype(str).str.strip()
+                        if "반품금액" in item_return_sorted.columns:
+                            item_return_sorted["반품금액"] = pd.to_numeric(item_return_sorted["반품금액"], errors="coerce").fillna(0)
+                            item_return_sorted = item_return_sorted.sort_values(
+                                ["반품금액", "반품수량", "거래처"],
+                                ascending=[False, False, True]
+                            ).reset_index(drop=True)
+
+                        clean_and_safe_display(
+                            item_return_sorted[["거래처", "반품금액", "반품수량", "주요반품원인"]],
+                            text_cols=["거래처", "주요반품원인"],
+                            height=None,
+                        )
                 else:
                     st.info("업체별 감소현황 데이터가 없습니다.")
 
