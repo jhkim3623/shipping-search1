@@ -1419,7 +1419,7 @@ with tab5:
             st.markdown("### 2) 선택 품목별 업체 감소현황")
 
             item_options = top_items["품목표시"].astype(str).tolist()
-            selected_item = st.selectbox("품목 선택", item_options, index=0, key="decline_item_select_v3")
+            selected_item = st.selectbox("품목 선택", item_options, index=0, key="decline_item_select_v5")
 
             if selected_item:
                 item_row = top_items[top_items["품목표시"].astype(str) == str(selected_item)].copy()
@@ -1459,7 +1459,7 @@ with tab5:
                     st.plotly_chart(
                         fig_item,
                         use_container_width=True,
-                        key=f"item_monthly_chart_{selected_item}_v3"
+                        key=f"item_monthly_chart_{selected_item}_v5"
                     )
                 else:
                     st.info("선택 품목의 월별 추이 데이터가 없습니다.")
@@ -1563,18 +1563,40 @@ with tab5:
                             height=None,
                         )
 
-                    st.markdown("#### 품목 반품 요약 하단 업체 선택")
-                    customer_options = sorted(cust_summary["거래처"].dropna().astype(str).str.strip().unique().tolist())
+                    st.markdown("#### 업체별 월판매 현황")
+                    customer_options = cust_summary.sort_values("순위")["거래처"].dropna().astype(str).str.strip().tolist()
+
                     if len(customer_options) > 0:
-                        selected_customer = st.selectbox(
-                            "업체 선택",
-                            options=customer_options,
-                            index=0,
-                            key="decline_item_customer_select_v3"
-                        )
+                        left_col, m1, m2, m3 = st.columns([2.2, 1, 1, 1])
+
+                        with left_col:
+                            selected_customer = st.selectbox(
+                                "업체 선택",
+                                options=customer_options,
+                                index=0,
+                                key="decline_item_customer_select_v5"
+                            )
+
+                        selected_customer = str(selected_customer).strip()
+                        selected_row = cust_summary[cust_summary["거래처"].astype(str).str.strip() == selected_customer].copy()
+
+                        if not selected_row.empty:
+                            sr = selected_row.iloc[0]
+                            with m1:
+                                st.metric("현재 순위", f"{int(sr['순위'])}")
+                            with m2:
+                                st.metric("감소금액", f"{int(sr['감소금액']):,} 원")
+                            with m3:
+                                st.metric("반품금액", f"{int(sr['반품금액']):,} 원")
+                        else:
+                            with m1:
+                                st.metric("현재 순위", "-")
+                            with m2:
+                                st.metric("감소금액", "-")
+                            with m3:
+                                st.metric("반품금액", "-")
 
                         st.markdown("#### 선택 업체의 해당 품목 월별 판매금액 추이")
-                        selected_customer = str(selected_customer).strip()
 
                         selected_customer_month = item_cust.copy()
                         selected_customer_month["거래처"] = selected_customer_month["거래처"].astype(str).str.strip()
@@ -1616,31 +1638,12 @@ with tab5:
                             st.plotly_chart(
                                 fig_item_customer,
                                 use_container_width=True,
-                                key=f"item_customer_monthly_chart_{selected_item}_{selected_customer}_v3"
+                                key=f"item_customer_monthly_chart_{selected_item}_{selected_customer}_v5"
                             )
                         else:
                             st.info("선택한 업체의 해당 품목 판매금액 월별 데이터가 없습니다.")
                     else:
                         st.info("선택 가능한 업체가 없습니다.")
-
-                    st.markdown("#### 업체별 감소금액 차트")
-                    top_cust = cust_summary.head(10).copy()
-                    if not top_cust.empty:
-                        fig_c = go.Figure()
-                        fig_c.add_trace(go.Bar(
-                            x=top_cust["거래처"],
-                            y=top_cust["감소금액"],
-                            text=[f"{v:,.0f}" for v in top_cust["감소금액"]],
-                            textposition="outside",
-                            marker_color=["#d62728" if v > 0 else "#2ca02c" for v in top_cust["감소금액"]],
-                            hovertemplate="거래처: %{x}<br>감소금액: %{y:,.0f}원<extra></extra>",
-                        ))
-                        fig_c.update_layout(height=420, yaxis_title="감소금액(원)", yaxis_tickformat=",")
-                        st.plotly_chart(
-                            fig_c,
-                            use_container_width=True,
-                            key=f"customer_decline_bar_{selected_item}_v3"
-                        )
                 else:
                     st.info("업체별 감소현황 데이터가 없습니다.")
 
