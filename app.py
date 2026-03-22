@@ -478,12 +478,10 @@ def build_priority_results(monthly_sales, detail_df, all_months):
         decline_amount = max(0.0, avg_first - avg_last)
         decline_rate = (decline_amount / avg_first) if avg_first > 0 else 0.0
 
-        # 시계열 통계
         monthly_vals = cust_monthly["금액(원)"].astype(float).tolist()
         slope = calc_slope(monthly_vals)
         cv = calc_cv(monthly_vals)
 
-        # 최근 3개월 악화
         recent_months = all_months[-3:] if len(all_months) >= 3 else all_months
         recent_data = cust_monthly[cust_monthly["월"].isin(recent_months)].sort_values("월")
         if len(recent_data) >= 2:
@@ -494,7 +492,6 @@ def build_priority_results(monthly_sales, detail_df, all_months):
             recent_neg_ratio = 0.0
             recent_avg_change = 0.0
 
-        # 품목 확산도
         if "품목코드" in cust_detail.columns:
             first_products = cust_detail[cust_detail["월"].isin(first_half)]["품목코드"].nunique()
             last_products = cust_detail[cust_detail["월"].isin(last_half)]["품목코드"].nunique()
@@ -521,11 +518,10 @@ def build_priority_results(monthly_sales, detail_df, all_months):
     if base_df.empty:
         return base_df, first_half, last_half
 
-    # 60% : 전반기 vs 후반기 감소
+    # 요청 구조 유지: 60 / 20 / 20
     amount_component = scale_to_100(base_df["실제감소액"]) * 0.7 + scale_to_100(base_df["하락률(%)"]) * 0.3
     base_df["감소규모점수"] = amount_component * 0.60
 
-    # 20% : 통계 분석
     stat_component = (
         scale_to_100(base_df["기울기"], reverse=True) * 0.5 +
         scale_to_100(base_df["최근음수비중"]) * 0.3 +
@@ -533,7 +529,6 @@ def build_priority_results(monthly_sales, detail_df, all_months):
     )
     base_df["통계추세점수"] = stat_component * 0.20
 
-    # 20% : AI 해석 점수(룰 기반)
     ai_component = (
         scale_to_100(base_df["품목감소확산도"]) * 0.35 +
         scale_to_100(base_df["전체_매출액"]) * 0.35 +
@@ -547,7 +542,6 @@ def build_priority_results(monthly_sales, detail_df, all_months):
         base_df["AI분석점수"]
     ).round(1)
 
-    # 분석 문구
     comments = []
     for _, r in base_df.iterrows():
         msg = []
@@ -837,7 +831,6 @@ with tab4:
 
                         contribution_rows.append({
                             "품목코드": str(prod_code),
-                            "품목명(공식)": str(prod_name) if pd.notna(prod_name) else "",
                             "품목표시": str(prod_label),
                             "전반부_평균": int(round(first_avg, 0)),
                             "후반부_평균": int(round(last_avg, 0)),
@@ -853,54 +846,18 @@ with tab4:
                     contribution_df = contribution_df.sort_values("감소액", ascending=False).reset_index(drop=True)
 
                     st.markdown("### 📋 품목별 변화율 상세")
+                    detail_cols = [
+                        "품목코드", "품목표시", "전반부_평균", "후반부_평균",
+                        "감소액", "변화액", "변화율(%)", "총매출", "성장매출", "CV"
+                    ]
                     clean_and_safe_display(
-                        contribution_df,
+                        contribution_df[detail_cols],
                         pinned_cols=["품목코드"],
-                        text_cols=["품목코드", "품목명(공식)", "품목표시"]
+                        text_cols=["품목코드", "품목표시"]
                     )
 
-                    st.markdown("### 📌 품목 분류 요약")
-                    c1, c2, c3 = st.columns(3)
-
-                    with c1:
-                        st.markdown("**상위 매출 품목**")
-                        top_sales_items = contribution_df.sort_values(
-                            ["감소액", "총매출"], ascending=[False, False]
-                        ).head(5)[["품목표시", "총매출", "감소액", "CV"]]
-                        clean_and_safe_display(
-                            top_sales_items,
-                            height=260,
-                            pinned_cols=["품목표시"],
-                            text_cols=["품목표시"]
-                        )
-
-                    with c2:
-                        st.markdown("**변동이 큰 품목**")
-                        high_var_items = contribution_df.sort_values(
-                            ["감소액", "CV", "총매출"], ascending=[False, False, False]
-                        ).head(5)[["품목표시", "CV", "총매출", "감소액"]]
-                        clean_and_safe_display(
-                            high_var_items,
-                            height=260,
-                            pinned_cols=["품목표시"],
-                            text_cols=["품목표시"]
-                        )
-
-                    with c3:
-                        st.markdown("**매출이 성장한 품목**")
-                        growth_items = contribution_df[contribution_df["성장매출"] > 0].copy()
-                        growth_items = growth_items.sort_values(
-                            ["총매출", "성장매출"], ascending=[False, False]
-                        ).head(5)[["품목표시", "총매출", "성장매출", "CV"]]
-                        clean_and_safe_display(
-                            growth_items,
-                            height=260,
-                            pinned_cols=["품목표시"],
-                            text_cols=["품목표시"]
-                        )
-
                     st.markdown("---")
-                    st.markdown("### 📈 영업용 시각화")
+                    st.markdown("### 📈 매출 및 품목별 변동 추이")
 
                     # 1) 업체 전체 월별 매출 추이
                     fig_total = go.Figure()
@@ -1002,7 +959,13 @@ with tab4:
                             height=460,
                             yaxis_tickformat=",",
                             yaxis_title="매출액(원)",
-                            legend=dict(orientation="h", yanchor="bottom", y=-0.35)
+                            legend=dict(
+                                orientation="h",
+                                yanchor="bottom",
+                                y=-0.35,
+                                x=0,
+                                xanchor="left"
+                            )
                         )
                         fig_products = add_year_month_axis(fig_products, top_product_monthly["날짜축"])
                         st.plotly_chart(fig_products, use_container_width=True)
@@ -1012,6 +975,9 @@ with tab4:
 
                         if show_helper:
                             st.markdown("#### 3-1) 변화율 보조 그래프")
+                            st.markdown("**대상 품목**")
+                            for item in top_products:
+                                st.write(f"- {item}")
 
                             indexed_df = make_indexed_series(
                                 top_product_monthly,
@@ -1057,7 +1023,6 @@ with tab4:
                                 title=f"품목간 매출 규모 차이가 커서 추가 표시 (최대/최소 약 {scale_ratio:.1f}배)",
                                 height=420,
                                 yaxis_title="지수값",
-                                legend=dict(orientation="h", yanchor="bottom", y=-0.25)
                             )
                             fig_idx = add_year_month_axis(fig_idx, indexed_df["날짜축"])
                             st.plotly_chart(fig_idx, use_container_width=True)
@@ -1091,24 +1056,6 @@ with tab4:
                             yaxis_title="매출액(원)"
                         )
                         st.plotly_chart(fig_bar, use_container_width=True)
-
-            st.markdown("---")
-            st.markdown("#### 📌 점수 산식 설명 / 추천")
-            st.write(
-                """
-                현재 점수는 요청하신 **전후반기 매출감소 60% + 통계분석 20% + AI분석 20%** 구조를 유지하면서,
-                단순 평균 비교보다 더 정확하게 보기 위해 아래 요소를 함께 반영했습니다.
-
-                - **감소규모(60%)**: 전반부 평균 대비 후반부 평균 감소액 + 하락률
-                - **통계분석(20%)**: 월별 매출 추세선 기울기, 최근 악화 지속 여부, CV(변동계수)
-                - **AI분석(20%)**: 품목 감소 확산도, 전체 매출 규모, 최근 평균 증감
-
-                이유:
-                - 단순 전/후반 평균만 보면 일시적 급등락에 과민 반응할 수 있음
-                - 실제 영업 대응은 “최근에도 계속 나빠지는지”, “여러 품목으로 감소가 번졌는지”, “전체 영향 규모가 큰지”가 중요함
-                - 그래서 **시계열 하락성 + 품목 확산성 + 규모성**을 함께 보는 방식이 더 실무적입니다
-                """
-            )
 
 with tab5:
     st.subheader("원자료(필터 적용됨)")
