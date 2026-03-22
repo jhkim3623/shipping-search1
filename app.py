@@ -17,29 +17,70 @@ st.markdown("""
     padding-right: 0.7rem;
     max-width: 100%;
 }
+
+/* 공통 block 정렬 */
 div[data-testid="stHorizontalBlock"] {
-    gap: 0.6rem;
+    gap: 0.55rem;
     align-items: stretch;
 }
+
+/* metric 카드 - 더 얇고 균일하게 */
 div[data-testid="stMetric"] {
     background: #fafafa;
     border: 1px solid #eeeeee;
     border-radius: 10px;
-    padding: 0.5rem 0.7rem;
-    min-height: 86px;
+    padding: 0.28rem 0.6rem !important;
+    min-height: 58px !important;
+    height: 58px !important;
     display: flex;
     flex-direction: column;
     justify-content: center;
+    box-sizing: border-box;
+}
+
+/* metric 내부 라벨/값 폰트 축소 */
+div[data-testid="stMetricLabel"] {
+    font-size: 0.72rem !important;
+    line-height: 1.0 !important;
+    margin-bottom: 0.08rem !important;
+}
+div[data-testid="stMetricValue"] {
+    font-size: 1.02rem !important;
+    line-height: 1.05 !important;
+}
+
+/* select box wrapper 높이 정렬 */
+div[data-baseweb="select"] {
+    min-height: 58px !important;
 }
 div[data-baseweb="select"] > div {
-    min-height: 56px;
+    min-height: 58px !important;
+    height: 58px !important;
+    align-items: center !important;
+    display: flex !important;
+    box-sizing: border-box !important;
 }
+
+/* select 내부 값 세로 가운데 */
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] div {
+    line-height: 1.2 !important;
+}
+
+/* select label 간격 최소화 */
+label[data-testid="stWidgetLabel"] p {
+    margin-bottom: 0.15rem !important;
+    font-size: 0.78rem !important;
+}
+
+/* dataframe */
 div[data-testid="stDataFrame"] {
     width: 100%;
 }
 [data-testid="column"] {
     width: 100% !important;
 }
+
 .app-main-title {
     display: block;
     font-size: 1.8rem;
@@ -54,6 +95,7 @@ div[data-testid="stDataFrame"] {
     font-weight: 700;
     margin-bottom: 0.2rem;
 }
+
 @media (max-width: 1024px) {
     .block-container {
         padding-left: 0.45rem;
@@ -71,9 +113,25 @@ div[data-testid="stDataFrame"] {
     .section-title {
         font-size: 1.2rem;
     }
+
     div[data-testid="stMetric"] {
-        min-height: 80px;
-        padding: 0.45rem 0.6rem;
+        min-height: 54px !important;
+        height: 54px !important;
+        padding: 0.25rem 0.5rem !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 0.68rem !important;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 0.92rem !important;
+    }
+
+    div[data-baseweb="select"] {
+        min-height: 54px !important;
+    }
+    div[data-baseweb="select"] > div {
+        min-height: 54px !important;
+        height: 54px !important;
     }
 }
 </style>
@@ -1868,7 +1926,12 @@ with tab5:
             st.markdown("### 2) 선택 품목별 업체 감소현황")
 
             item_options = top_items["품목표시"].astype(str).tolist()
-            selected_item = st.selectbox("품목 선택", item_options, index=0, key="decline_item_select_v5")
+
+            # 품목 선택 + metric 박스 동일 톤 정렬
+            left_item, ic1, ic2, ic3, ic4 = st.columns([2.6, 1, 1, 1, 1])
+
+            with left_item:
+                selected_item = st.selectbox("품목 선택", item_options, index=0, key="decline_item_select_v5")
 
             if selected_item:
                 item_row = top_items[top_items["품목표시"].astype(str) == str(selected_item)].copy()
@@ -1880,13 +1943,25 @@ with tab5:
                     customer_return_reason_df["품목표시"].astype(str) == str(selected_item)
                 ].copy()
 
-                c1, c2, c3, c4 = st.columns(4)
                 if not item_row.empty:
                     rr = item_row.iloc[0]
-                    c1.metric("품목하락점수", f"{rr['품목하락점수']:.1f}")
-                    c2.metric("감소금액", f"{int(rr['감소금액']):,} 원")
-                    c3.metric("하락률", f"{rr['하락률(%)']:.1f}%")
-                    c4.metric("반품금액", f"{int(rr['반품금액']):,} 원")
+                    with ic1:
+                        st.metric("품목하락점수", f"{rr['품목하락점수']:.1f}")
+                    with ic2:
+                        st.metric("감소금액", f"{int(rr['감소금액']):,} 원")
+                    with ic3:
+                        st.metric("하락률", f"{rr['하락률(%)']:.1f}%")
+                    with ic4:
+                        st.metric("반품금액", f"{int(rr['반품금액']):,} 원")
+                else:
+                    with ic1:
+                        st.metric("품목하락점수", "-")
+                    with ic2:
+                        st.metric("감소금액", "-")
+                    with ic3:
+                        st.metric("하락률", "-")
+                    with ic4:
+                        st.metric("반품금액", "-")
 
                 common_month_axis = build_month_axis_frame(
                     item_month["월"].unique().tolist() if not item_month.empty else []
@@ -1993,7 +2068,7 @@ with tab5:
                     customer_options = cust_summary.sort_values("순위")["거래처"].dropna().astype(str).str.strip().tolist()
 
                     if len(customer_options) > 0:
-                        left_col, m1, m2, m3 = st.columns([2.9, 1.2, 1.2, 1.2])
+                        left_col, m1, m2, m3 = st.columns([2.8, 1.05, 1.15, 1.05])
 
                         with left_col:
                             selected_customer = st.selectbox(
