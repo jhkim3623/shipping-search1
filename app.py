@@ -1064,6 +1064,11 @@ with tab1:
         st.warning("조건에 맞는 데이터가 없습니다.")
     else:
         q1 = q.copy()
+        if "날짜" in q1.columns:
+            q1["월"] = pd.to_datetime(q1["날짜"], errors="coerce").dt.strftime("%Y-%m")
+        else:
+            q1["월"] = ""
+
         for c in ["거래처", "품목코드", "점착제코드"]:
             if c in q1.columns:
                 q1[c] = q1[c].astype(str)
@@ -1075,24 +1080,38 @@ with tab1:
             q1.groupby(uc, dropna=False)
             .agg(
                 출고횟수=("수량(M2)", "count"),
+                월평균_출고량=("수량(M2)", "mean"),
                 총량_M2=("수량(M2)", "sum"),
+                월평균_매출=("금액(원)", "mean"),
                 매출액=("금액(원)", "sum"),
             )
             .reset_index()
         )
 
-        g["가중평균단가"] = np.where(
-            g["총량_M2"] > 0,
-            (g["매출액"] / g["총량_M2"]).round(0),
-            0,
-        )
+        if "총량_M2" in g.columns and "매출액" in g.columns:
+            g["가중평균단가"] = np.where(
+                g["총량_M2"] > 0,
+                (g["매출액"] / g["총량_M2"]).round(0),
+                0,
+            )
+        else:
+            g["가중평균단가"] = 0
+
+        ordered_cols = [
+            "거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력",
+            "최근날짜", "최근단가", "출고횟수",
+            "월평균_출고량", "월평균_매출",
+            "총량_M2", "매출액", "가중평균단가"
+        ]
+        ordered_cols = [c for c in ordered_cols if c in g.columns]
 
         sc = [c for c in ["거래처", "품목코드"] if c in g.columns]
 
         clean_and_safe_display(
-            g.sort_values(sc) if sc else g,
+            g[ordered_cols].sort_values(sc) if sc else g[ordered_cols],
             pinned_cols=["거래처", "품목코드"],
             text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜"],
+            height=None,
         )
 
 with tab2:
@@ -1102,6 +1121,11 @@ with tab2:
         st.warning("조건에 맞는 데이터가 없습니다.")
     else:
         q2 = q.copy()
+        if "날짜" in q2.columns:
+            q2["월"] = pd.to_datetime(q2["날짜"], errors="coerce").dt.strftime("%Y-%m")
+        else:
+            q2["월"] = ""
+
         for c in ["거래처", "품목코드"]:
             if c in q2.columns:
                 q2[c] = q2[c].astype(str)
@@ -1113,24 +1137,37 @@ with tab2:
             q2.groupby(uc, dropna=False)
             .agg(
                 출고횟수=("수량(M2)", "count"),
+                월평균_출고량=("수량(M2)", "mean"),
                 총량_M2=("수량(M2)", "sum"),
+                월평균_매출=("금액(원)", "mean"),
                 매출액=("금액(원)", "sum"),
             )
             .reset_index()
         )
 
-        g2["가중평균단가"] = np.where(
-            g2["총량_M2"] > 0,
-            (g2["매출액"] / g2["총량_M2"]).round(0),
-            0,
-        )
+        if "총량_M2" in g2.columns and "매출액" in g2.columns:
+            g2["가중평균단가"] = np.where(
+                g2["총량_M2"] > 0,
+                (g2["매출액"] / g2["총량_M2"]).round(0),
+                0,
+            )
+        else:
+            g2["가중평균단가"] = 0
+
+        ordered_cols = [
+            "품목코드", "거래처", "최근날짜", "최근단가", "출고횟수",
+            "월평균_출고량", "월평균_매출",
+            "총량_M2", "매출액", "가중평균단가"
+        ]
+        ordered_cols = [c for c in ordered_cols if c in g2.columns]
 
         sc = [c for c in ["품목코드", "거래처"] if c in g2.columns]
 
         clean_and_safe_display(
-            g2.sort_values(sc) if sc else g2,
+            g2[ordered_cols].sort_values(sc) if sc else g2[ordered_cols],
             pinned_cols=["품목코드", "거래처"],
             text_cols=["품목코드", "거래처", "최근날짜"],
+            height=None,
         )
 
 with tab3:
@@ -1152,7 +1189,7 @@ with tab3:
 
         st.markdown("### 1) 품목 기준 견적 레퍼런스")
         overview_cols = [
-            "품목코드", "점착제코드", "점착제명",
+            "품목코드", "점착제코드",
             "최저단가", "최고단가", "거래처수", "총출고횟수",
             "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
         ]
@@ -1161,7 +1198,7 @@ with tab3:
         clean_and_safe_display(
             overview[overview_cols] if overview_cols else pd.DataFrame(),
             pinned_cols=["품목코드"],
-            text_cols=["품목코드", "점착제코드", "점착제명"],
+            text_cols=["품목코드", "점착제코드"],
             height=None,
         )
 
