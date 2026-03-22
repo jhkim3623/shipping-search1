@@ -11,8 +11,8 @@ st.set_page_config(page_title="출고 이력 검색", layout="wide")
 st.markdown("""
 <style>
 .block-container {
-    padding-top: 1rem;
-    padding-bottom: 1.2rem;
+    padding-top: 0.55rem;
+    padding-bottom: 1.0rem;
     padding-left: 0.7rem;
     padding-right: 0.7rem;
     max-width: 100%;
@@ -32,13 +32,33 @@ div[data-testid="stDataFrame"] {
 [data-testid="column"] {
     width: 100% !important;
 }
+.app-main-title {
+    font-size: 1.9rem;
+    font-weight: 800;
+    line-height: 1.2;
+    margin: 0 0 0.35rem 0;
+    padding: 0;
+}
+.section-title {
+    font-size: 1.55rem;
+    font-weight: 700;
+    margin-bottom: 0.15rem;
+}
 @media (max-width: 1024px) {
     .block-container {
         padding-left: 0.45rem;
         padding-right: 0.45rem;
+        padding-top: 0.35rem;
     }
     html, body, [class*="css"] {
         font-size: 14px;
+    }
+    .app-main-title {
+        font-size: 1.45rem;
+        line-height: 1.15;
+    }
+    .section-title {
+        font-size: 1.25rem;
     }
 }
 </style>
@@ -644,49 +664,51 @@ def build_priority_results(monthly_sales, detail_df, all_months):
     if base_df.empty:
         return base_df, first_half, last_half
 
-    amount_component = scale_to_100(base_df["실제감소액"]) * 0.7 + scale_to_100(base_df["하락률(%)"]) * 0.3
-    base_df["감소규모점수"] = amount_component * 0.60
-
-    stat_component = (
-        scale_to_100(base_df["기울기"], reverse=True) * 0.5 +
-        scale_to_100(base_df["최근음수비중"]) * 0.3 +
-        scale_to_100(base_df["CV"]) * 0.2
+    # 1) 감소금액 중심: 75%
+    amount_component = (
+        scale_to_100(base_df["실제감소액"]) * 0.55 +
+        scale_to_100(base_df["하락률(%)"]) * 0.20
     )
-    base_df["통계추세점수"] = stat_component * 0.20
+    base_df["감소규모점수"] = amount_component
 
-    ai_component = (
-        scale_to_100(base_df["품목감소확산도"]) * 0.35 +
-        scale_to_100(base_df["전체_매출액"]) * 0.35 +
-        scale_to_100(base_df["최근평균증감"], reverse=True) * 0.30
-    )
-    base_df["AI분석점수"] = ai_component * 0.20
+    # 2) 감소 추이 / 속도: 15%
+    trend_component = (
+        scale_to_100(base_df["기울기"], reverse=True) * 0.50 +
+        scale_to_100(base_df["최근음수비중"]) * 0.30 +
+        scale_to_100(base_df["최근평균증감"], reverse=True) * 0.20
+    ) * 0.15
+    base_df["추세하락점수"] = trend_component
+
+    # 3) 품목 감소 확산: 10%
+    spread_component = scale_to_100(base_df["품목감소확산도"]) * 0.10
+    base_df["품목감소점수"] = spread_component
 
     base_df["AI_우선순위점수"] = (
         base_df["감소규모점수"] +
-        base_df["통계추세점수"] +
-        base_df["AI분석점수"]
+        base_df["추세하락점수"] +
+        base_df["품목감소점수"]
     ).round(1)
 
     comments = []
     for _, r in base_df.iterrows():
         msg = []
         if r["실제감소액"] > 0:
-            msg.append(f"전후반 평균 감소 {int(r['실제감소액']):,}원")
+            msg.append(f"감소금액 {int(r['실제감소액']):,}원")
         if r["하락률(%)"] >= 20:
             msg.append(f"하락률 {r['하락률(%)']:.1f}%")
         if r["기울기"] < 0:
-            msg.append("월별 추세 하락")
+            msg.append("감소 추세 빠름")
         if r["최근음수비중"] >= 0.5:
-            msg.append("최근 월별 악화 지속")
+            msg.append("최근 감소 지속")
         if r["품목감소확산도"] >= 0.3:
-            msg.append("감소가 여러 품목으로 확산")
+            msg.append("품목 이탈 동반")
         comments.append(" | ".join(msg) if msg else "추세 안정")
 
     base_df["분석_내역"] = comments
 
     result_df = base_df.sort_values(
-        ["AI_우선순위점수", "실제감소액", "하락률(%)"],
-        ascending=[False, False, False]
+        ["AI_우선순위점수", "실제감소액", "기울기", "품목감소확산도"],
+        ascending=[False, False, True, False]
     ).reset_index(drop=True)
 
     result_df["순위"] = range(1, len(result_df) + 1)
@@ -1007,7 +1029,7 @@ def draw_quote_reference_chart(special_df):
 
 DEFAULT_FILE = "data.xlsx"
 
-st.title("출고 이력 검색(거래처/품목/가로폭/점착제)")
+st.markdown('<div class="app-main-title">출고 이력 검색(거래처/품목/가로폭/점착제)</div>', unsafe_allow_html=True)
 uploaded = st.file_uploader("📂 다른 파일 업로드 (미업로드 시 기본 데이터 자동 로드)", type=["xlsx"])
 
 if uploaded:
@@ -1245,8 +1267,8 @@ with tab3:
         )
 
 with tab4:
-    st.subheader("📉 AI 기반 매출 하락 업체 분석")
-    st.caption("전후반기 매출감소 60% + 통계분석 20% + AI분석 20%")
+    st.subheader("매출 하락 업체 분석")
+    st.caption("감소금액 중심 75% + 감소추세 15% + 품목감소 10%")
 
     if q.empty or "날짜" not in q.columns or "금액(원)" not in q.columns or "거래처" not in q.columns:
         st.warning("분석에 필요한 데이터가 부족합니다.")
@@ -1259,13 +1281,20 @@ with tab4:
         elif priority_df.empty:
             st.success("✅ 설정 기간 동안 매출이 하락한 업체가 없습니다.")
         else:
+            st.info(
+                "순위 산정 방식: "
+                "① 감소금액 규모를 가장 크게 반영(75%), "
+                "② 감소 추세/속도 반영(15%), "
+                "③ 품목 감소 확산 반영(10%)"
+            )
+
             top_count = max(1, int(np.ceil(len(priority_df) * 0.35)))
             top_priority = priority_df.head(top_count).copy()
 
             st.markdown("### 🎯 매출감소 추이 업체 LIST")
 
             display_cols = [
-                "순위", "거래처", "AI_우선순위점수", "감소규모점수", "통계추세점수", "AI분석점수",
+                "순위", "거래처", "AI_우선순위점수", "감소규모점수", "추세하락점수", "품목감소점수",
                 "전체_매출액", "전반부_평균매출", "후반부_평균매출", "실제감소액", "하락률(%)", "분석_내역"
             ]
 
