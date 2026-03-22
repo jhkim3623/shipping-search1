@@ -42,7 +42,7 @@ def clean_and_safe_display(
                 disabled=disabled_cols,
                 placeholder="",
             )
-        st.dataframe(display_df, width="stretch", hide_index=True, placeholder="")
+        st.dataframe(display_df, width="stretch", hide_index=True)
         return None
 
     for col in display_df.columns:
@@ -125,7 +125,6 @@ def clean_and_safe_display(
             key=key,
             hide_index=True,
             disabled=disabled_cols,
-            placeholder="",
         )
 
     st.dataframe(
@@ -134,7 +133,6 @@ def clean_and_safe_display(
         width="stretch",
         height=height if height else "auto",
         hide_index=True,
-        placeholder="",
     )
     return None
 
@@ -193,9 +191,50 @@ def add_year_month_axis(fig, x_dates):
 
 
 def sales_to_manwon_label(value):
-    # 원 → 만원 단위 표기
-    # 예: 45,000,000원 -> 4,500
-    return f"{int(round(value / 10000.0, 0)):,}"
+    if pd.isna(value):
+        return ""
+    return f"{int(round(float(value) / 10000.0, 0)):,}"
+
+
+def make_text_position_map(items):
+    positions = ["top center", "bottom center", "middle right", "middle left"]
+    return {str(item): positions[i % len(positions)] for i, item in enumerate(items)}
+
+
+def make_indexed_series(df, group_col, value_col, time_col):
+    temp = df.copy().sort_values([group_col, time_col])
+
+    def _calc(g):
+        base_candidates = g[value_col].replace(0, np.nan).dropna()
+        if len(base_candidates) == 0:
+            g["지수값"] = np.nan
+        else:
+            base = base_candidates.iloc[0]
+            if pd.isna(base) or base == 0:
+                g["지수값"] = np.nan
+            else:
+                g["지수값"] = (g[value_col] / base) * 100
+        return g
+
+    return temp.groupby(group_col, group_keys=False).apply(_calc)
+
+
+def add_point_labels_to_px_figure(fig, df, series_col, x_col, y_col, text_col):
+    traces = list(fig.data)
+    for tr in traces:
+        series_name = str(tr.name)
+        sub = df[df[series_col].astype(str) == series_name].copy()
+        if sub.empty:
+            continue
+        sub = sub.sort_values(x_col)
+        tr.update(
+            mode="lines+markers+text",
+            text=sub[text_col].tolist(),
+            textfont=dict(size=10),
+            textposition="top center",
+            hovertemplate=f"{series_col}: {series_name}<br>월: %{{x}}<br>매출: %{{y:,.0f}}원<br>만원단위: %{{text}}<extra></extra>",
+        )
+    return fig
 
 
 @st.cache_data
@@ -587,8 +626,6 @@ with tab4:
                     stat_score += min(down_streak * 2, 4.0)
                     stat_score = min(stat_score, 20.0)
                 else:
-                    slope = 0.0
-                    cv = 0.0
                     stat_score = 0.0
 
                 if "품목코드" in all_cust_data.columns:
@@ -717,6 +754,7 @@ with tab4:
                             .sort_values(["품목코드", "월"])
                         )
                         product_monthly["날짜축"] = pd.to_datetime(product_monthly["월"] + "-01")
+                        product_monthly["만원라벨"] = product_monthly["금액(원)"].apply(sales_to_manwon_label)
 
                         pivot_prod = product_monthly.pivot_table(
                             index="품목코드",
@@ -727,8 +765,8 @@ with tab4:
                         )
 
                         contribution_rows = []
-                        for prod in pivot_prod.index:
-                            row = pivot_prod.loc[prod]
+                        for prod_code in pivot_prod.index:
+                            row = pivot_prod.loc[prod_code]
                             first_vals = [row[c] for c in first_half if c in row.index]
                             last_vals = [row[c] for c in last_half if c in row.index]
                             first_avg = float(np.mean(first_vals)) if len(first_vals) > 0 else 0.0
@@ -736,7 +774,7 @@ with tab4:
                             decline_amt = first_avg - last_avg
 
                             contribution_rows.append({
-                                "품목코드": prod,
+                                "품목코드": str(prod_code),
                                 "전반부_평균": int(round(first_avg, 0)),
                                 "후반부_평균": int(round(last_avg, 0)),
                                 "감소액": int(round(decline_amt, 0)),
@@ -770,6 +808,7 @@ with tab4:
                             text=[sales_to_manwon_label(v) for v in customer_total_monthly["금액(원)"]],
                             textposition="top center",
                             textfont=dict(size=10, color="#1f77b4"),
+                            hovertemplate="월: %{x|%Y-%m}<br>매출: %{y:,.0f}원<br>만원단위: %{text}<extra></extra>",
                         ))
 
                         if len(customer_total_monthly) >= 2:
@@ -782,7 +821,8 @@ with tab4:
                                 y=trend,
                                 mode="lines",
                                 name="추세선",
-                                line=dict(color="red", dash="dash", width=2)
+                                line=dict(color="red", dash="dash", width=2),
+                                hoverinfo="skip",
                             ))
 
                         fig_total.update_layout(
@@ -808,7 +848,8 @@ with tab4:
                                 ],
                                 text=[f"{v:,}" for v in top_contrib["감소액"]],
                                 textposition="outside",
-                                name="감소액"
+                                name="감소액",
+                                hovertemplate="품목코드: %{x}<br>감소액: %{y:,.0f}원<extra></extra>",
                             ))
                             fig_contrib.update_layout(
                                 title="2️⃣ 품목별 매출 감소 기여도 (감소 큰 순)",
@@ -819,28 +860,103 @@ with tab4:
                             )
                             st.plotly_chart(fig_contrib, use_container_width=True)
 
-                        # 3) 감소 주도 품목 월별 추이
-                        top_products = contribution_df.head(5)["품목코드"].tolist()
-                        top_product_monthly = product_monthly[product_monthly["품목코드"].isin(top_products)].copy()
+                        # 3) 감소 주도 품목 월별 추이 + 금액 라벨
+                        top_products = contribution_df.head(5)["품목코드"].astype(str).tolist()
+                        top_product_monthly = product_monthly[
+                            product_monthly["품목코드"].astype(str).isin(top_products)
+                        ].copy()
 
                         if not top_product_monthly.empty:
-                            fig_products = px.line(
-                                top_product_monthly,
-                                x="날짜축",
-                                y="금액(원)",
-                                color="품목코드",
-                                category_orders={"품목코드": top_products},
-                                markers=True,
-                                title="3️⃣ 감소 주도 품목 월별 매출 추이 (Top 5)",
-                                labels={"금액(원)": "매출액(원)", "날짜축": ""}
-                            )
+                            top_product_monthly["품목코드"] = top_product_monthly["품목코드"].astype(str)
+
+                            fig_products = go.Figure()
+                            pos_map = make_text_position_map(top_products)
+
+                            for prod_code in top_products:
+                                sub = top_product_monthly[
+                                    top_product_monthly["품목코드"] == prod_code
+                                ].sort_values("날짜축").copy()
+
+                                if sub.empty:
+                                    continue
+
+                                fig_products.add_trace(go.Scatter(
+                                    x=sub["날짜축"],
+                                    y=sub["금액(원)"],
+                                    mode="lines+markers+text",
+                                    name=prod_code,
+                                    line=dict(width=3),
+                                    marker=dict(size=8),
+                                    text=sub["만원라벨"],
+                                    textposition=pos_map.get(prod_code, "top center"),
+                                    textfont=dict(size=9),
+                                    hovertemplate=f"품목코드: {prod_code}<br>월: %{{x|%Y-%m}}<br>매출: %{{y:,.0f}}원<br>만원단위: %{{text}}<extra></extra>",
+                                ))
+
                             fig_products.update_layout(
+                                title="3️⃣ 감소 주도 품목 월별 매출 추이 (Top 5)",
                                 height=460,
                                 yaxis_tickformat=",",
+                                yaxis_title="매출액(원)",
                                 legend=dict(orientation="h", yanchor="bottom", y=-0.35)
                             )
                             fig_products = add_year_month_axis(fig_products, top_product_monthly["날짜축"])
                             st.plotly_chart(fig_products, use_container_width=True)
+
+                            st.caption("※ 각 포인트 값은 만원 단위입니다. 예: 4,500 = 4천5백만원")
+
+                            # 3-1) 보조 그래프: 첫 달=100 지수화
+                            st.markdown("#### 3-1) 변화율 보조 그래프 (첫 달=100 기준)")
+                            st.caption("금액 차이가 큰 품목이 함께 있을 때, 작은 금액 품목의 변화 추세도 잘 보이도록 지수화했습니다.")
+
+                            indexed_df = make_indexed_series(
+                                top_product_monthly,
+                                group_col="품목코드",
+                                value_col="금액(원)",
+                                time_col="날짜축"
+                            )
+                            indexed_df["지수라벨"] = indexed_df["지수값"].apply(
+                                lambda v: "" if pd.isna(v) else f"{v:.0f}"
+                            )
+
+                            fig_idx = go.Figure()
+                            for prod_code in top_products:
+                                sub = indexed_df[
+                                    indexed_df["품목코드"].astype(str) == str(prod_code)
+                                ].sort_values("날짜축").copy()
+
+                                if sub.empty:
+                                    continue
+
+                                fig_idx.add_trace(go.Scatter(
+                                    x=sub["날짜축"],
+                                    y=sub["지수값"],
+                                    mode="lines+markers+text",
+                                    name=prod_code,
+                                    line=dict(width=2),
+                                    marker=dict(size=7),
+                                    text=sub["지수라벨"],
+                                    textposition=pos_map.get(prod_code, "top center"),
+                                    textfont=dict(size=9),
+                                    hovertemplate=f"품목코드: {prod_code}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:.1f}}<br>(첫 달=100)<extra></extra>",
+                                    showlegend=False
+                                ))
+
+                            fig_idx.add_hline(
+                                y=100,
+                                line_dash="dash",
+                                line_color="gray",
+                                opacity=0.7
+                            )
+
+                            fig_idx.update_layout(
+                                title="작은 금액 품목까지 추세 비교가 잘 보이는 보조 그래프",
+                                height=420,
+                                yaxis_title="지수(첫 달=100)",
+                                legend=dict(orientation="h", yanchor="bottom", y=-0.25)
+                            )
+                            fig_idx = add_year_month_axis(fig_idx, indexed_df["날짜축"])
+                            st.plotly_chart(fig_idx, use_container_width=True)
 
                         # 4) 전반부 vs 후반부 비교
                         if not contribution_df.empty:
