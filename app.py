@@ -327,6 +327,35 @@ def add_year_month_axis(fig, x_dates):
     return fig
 
 
+def build_month_axis_frame(months):
+    month_list = sorted([str(m) for m in months if pd.notna(m) and str(m).strip() != ""])
+    axis_df = pd.DataFrame({"월": month_list})
+    if axis_df.empty:
+        axis_df["날짜축"] = pd.NaT
+        return axis_df
+    axis_df["날짜축"] = pd.to_datetime(axis_df["월"] + "-01", errors="coerce")
+    axis_df = axis_df.dropna(subset=["날짜축"]).sort_values("날짜축").reset_index(drop=True)
+    return axis_df
+
+
+def align_monthly_series(base_month_df, data_df, value_col):
+    if base_month_df is None or base_month_df.empty:
+        return pd.DataFrame(columns=["월", "날짜축", value_col])
+
+    out = base_month_df.copy()
+
+    if data_df is None or data_df.empty or value_col not in data_df.columns or "월" not in data_df.columns:
+        out[value_col] = 0
+        return out
+
+    temp = data_df.copy()
+    temp["월"] = temp["월"].astype(str)
+    temp = temp.groupby("월", as_index=False)[value_col].sum()
+    out = out.merge(temp, on="월", how="left")
+    out[value_col] = pd.to_numeric(out[value_col], errors="coerce").fillna(0)
+    return out
+
+
 def sales_to_manwon_label(value):
     if pd.isna(value):
         return ""
@@ -654,7 +683,7 @@ def load_excel(file_bytes):
 
 
 # ══════════════════════════════════════════════════════════
-# 매출 하락 분석용 사전 계산
+# 매출 하락 분석용
 # ══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def build_analysis_cache(q):
@@ -1820,26 +1849,43 @@ with tab5:
                     c3.metric("하락률", f"{rr['하락률(%)']:.1f}%")
                     c4.metric("반품금액", f"{int(rr['반품금액']):,} 원")
 
+                # 공통 x축 기준 생성
+                common_month_axis = build_month_axis_frame(
+                    item_month["월"].unique().tolist() if not item_month.empty else []
+                )
+
                 st.markdown("#### 선택 품목 월별 추이")
-                if not item_month.empty:
-                    item_month = item_month.copy()
-                    item_month["날짜축"] = pd.to_datetime(item_month["월"] + "-01", errors="coerce")
-                    item_month = item_month.groupby(["월", "날짜축"], as_index=False)["매출액"].sum().sort_values("날짜축")
+                if not item_month.empty and not common_month_axis.empty:
+                    item_month_plot = align_monthly_series(
+                        common_month_axis,
+                        item_month[["월", "매출액"]].copy(),
+                        "매출액"
+                    )
 
                     fig_item = go.Figure()
                     fig_item.add_trace(go.Scatter(
-                        x=item_month["날짜축"],
-                        y=item_month["매출액"],
+                        x=item_month_plot["날짜축"],
+                        y=item_month_plot["매출액"],
                         mode="lines+markers+text",
-                        text=[sales_to_manwon_label(v) for v in item_month["매출액"]],
+                        text=[sales_to_manwon_label(v) for v in item_month_plot["매출액"]],
                         textposition="top center",
                         name="월매출",
                         line=dict(width=3, color="#1f77b4"),
                         marker=dict(size=8),
                         hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
                     ))
-                    fig_item.update_layout(height=380, yaxis_title="판매금액(원)", yaxis_tickformat=",")
-                    fig_item = add_year_month_axis(fig_item, item_month["날짜축"])
+                    fig_item.update_layout(
+                        height=380,
+                        yaxis_title="판매금액(원)",
+                        yaxis_tickformat=",",
+                        xaxis=dict(
+                            range=[
+                                common_month_axis["날짜축"].min(),
+                                common_month_axis["날짜축"].max()
+                            ]
+                        )
+                    )
+                    fig_item = add_year_month_axis(fig_item, common_month_axis["날짜축"])
                     st.plotly_chart(
                         fig_item,
                         use_container_width=True,
@@ -1953,24 +1999,19 @@ with tab5:
                             selected_customer_month["거래처"] == selected_customer
                         ].copy()
 
-                        if not selected_customer_month.empty:
-                            selected_customer_month["날짜축"] = pd.to_datetime(
-                                selected_customer_month["월"].astype(str) + "-01",
-                                errors="coerce"
-                            )
-
-                            selected_customer_month = (
-                                selected_customer_month.groupby(["월", "날짜축"], as_index=False)["매출액"]
-                                .sum()
-                                .sort_values("날짜축")
+                        if not common_month_axis.empty:
+                            selected_customer_month_plot = align_monthly_series(
+                                common_month_axis,
+                                selected_customer_month[["월", "매출액"]].copy() if not selected_customer_month.empty else pd.DataFrame(columns=["월", "매출액"]),
+                                "매출액"
                             )
 
                             fig_item_customer = go.Figure()
                             fig_item_customer.add_trace(go.Scatter(
-                                x=selected_customer_month["날짜축"],
-                                y=selected_customer_month["매출액"],
+                                x=selected_customer_month_plot["날짜축"],
+                                y=selected_customer_month_plot["매출액"],
                                 mode="lines+markers+text",
-                                text=[sales_to_manwon_label(v) for v in selected_customer_month["매출액"]],
+                                text=[sales_to_manwon_label(v) for v in selected_customer_month_plot["매출액"]],
                                 textposition="top center",
                                 name=selected_customer,
                                 line=dict(width=3, color="#1f77b4"),
@@ -1980,9 +2021,15 @@ with tab5:
                             fig_item_customer.update_layout(
                                 height=380,
                                 yaxis_title="판매금액(원)",
-                                yaxis_tickformat=","
+                                yaxis_tickformat=",",
+                                xaxis=dict(
+                                    range=[
+                                        common_month_axis["날짜축"].min(),
+                                        common_month_axis["날짜축"].max()
+                                    ]
+                                )
                             )
-                            fig_item_customer = add_year_month_axis(fig_item_customer, selected_customer_month["날짜축"])
+                            fig_item_customer = add_year_month_axis(fig_item_customer, common_month_axis["날짜축"])
                             st.plotly_chart(
                                 fig_item_customer,
                                 use_container_width=True,
