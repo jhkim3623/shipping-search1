@@ -1789,13 +1789,13 @@ with tab4:
 
                     st.markdown("### 📋 품목별 변화율 상세")
                     detail_cols = [
-                        "품목코드", "품목표시", "전반부_평균", "후반부_평균",
+                        "품목코드", "전반부_평균", "후반부_평균",
                         "감소액", "변화액", "변화율(%)", "총매출", "성장매출", "CV"
                     ]
                     clean_and_safe_display(
                         contribution_df[detail_cols] if not contribution_df.empty else pd.DataFrame(columns=detail_cols),
                         pinned_cols=["품목코드"],
-                        text_cols=["품목코드", "품목표시"]
+                        text_cols=["품목코드"]
                     )
 
                     st.markdown("---")
@@ -2039,7 +2039,7 @@ with tab5:
 
             st.markdown("### 1) 감소 품목 우선순위 LIST (상위 35%)")
             rank_cols = [
-                "순위", "품목코드", "품목표시", "품목하락점수",
+                "순위", "품목코드", "품목하락점수",
                 "전체매출액", "전반부_평균매출", "후반부_평균매출",
                 "감소금액", "하락률(%)", "감소고객사수",
                 "반품금액", "반품율(%)", "주요반품원인", "AI분석"
@@ -2049,7 +2049,7 @@ with tab5:
             clean_and_safe_display(
                 top_items[rank_cols],
                 pinned_cols=["순위", "품목코드"],
-                text_cols=["품목코드", "품목표시", "주요반품원인", "AI분석"],
+                text_cols=["품목코드", "주요반품원인", "AI분석"],
                 height=None,
             )
 
