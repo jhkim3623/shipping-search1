@@ -83,11 +83,14 @@ div[data-baseweb="select"] > div {
     align-items: center !important;
     box-sizing: border-box !important;
     border-radius: 10px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
 }
 
 /* select 내부 값 세로 중앙 */
 div[data-baseweb="select"] div[class*="valueContainer"] {
     min-height: 56px !important;
+    height: 56px !important;
     display: flex !important;
     align-items: center !important;
     padding-top: 0 !important;
@@ -97,24 +100,31 @@ div[data-baseweb="select"] div[class*="singleValue"] {
     display: flex !important;
     align-items: center !important;
     color: #111827 !important;
-    font-size: 0.93rem !important;
-    line-height: 1.2 !important;
+    font-size: 0.95rem !important;
+    line-height: 1.25 !important;
+    margin: 0 !important;
 }
 div[data-baseweb="select"] input {
     color: #111827 !important;
-    line-height: 1.2 !important;
+    line-height: 1.25 !important;
+    font-size: 0.95rem !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
 div[data-baseweb="select"] input::placeholder {
-    color: #9ca3af !important;
+    color: #6b7280 !important;
     opacity: 1 !important;
 }
 
 /* choose options 복구 */
 div[data-baseweb="select"] div[class*="placeholder"] {
-    color: #9ca3af !important;
+    color: #6b7280 !important;
     opacity: 1 !important;
-    font-size: 0.92rem !important;
-    line-height: 1.2 !important;
+    font-size: 0.95rem !important;
+    line-height: 1.25 !important;
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
 }
 
 /* multiselect tag 정렬 */
@@ -123,6 +133,55 @@ div[data-baseweb="tag"] {
     align-items: center !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
+}
+
+/* 사이드바 필터 글씨 선명하게 */
+section[data-testid="stSidebar"] label[data-testid="stWidgetLabel"] p {
+    color: #374151 !important;
+    font-weight: 700 !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="valueContainer"] {
+    min-height: 56px !important;
+    height: 56px !important;
+    display: flex !important;
+    align-items: center !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="singleValue"] {
+    color: #111827 !important;
+    font-size: 0.96rem !important;
+    line-height: 1.25 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="placeholder"] {
+    color: #6b7280 !important;
+    opacity: 1 !important;
+    font-size: 0.96rem !important;
+    line-height: 1.25 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] input {
+    color: #111827 !important;
+    font-size: 0.96rem !important;
+    line-height: 1.25 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] input::placeholder {
+    color: #6b7280 !important;
+    opacity: 1 !important;
+}
+
+/* 멀티셀렉트 내부 텍스트 잘림 방지 */
+section[data-testid="stSidebar"] div[data-baseweb="select"] * {
+    overflow: visible !important;
 }
 
 /* dataframe */
@@ -146,16 +205,6 @@ div[data-testid="stDataFrame"] {
     font-size: 1.45rem;
     font-weight: 700;
     margin-bottom: 0.2rem;
-}
-
-/* sidebar multiselect placeholder 복구 */
-section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="placeholder"] {
-    color: #9ca3af !important;
-    opacity: 1 !important;
-}
-section[data-testid="stSidebar"] div[data-baseweb="select"] input::placeholder {
-    color: #9ca3af !important;
-    opacity: 1 !important;
 }
 
 @media (max-width: 1024px) {
@@ -195,6 +244,13 @@ section[data-testid="stSidebar"] div[data-baseweb="select"] input::placeholder {
     }
     div[data-baseweb="select"] div[class*="valueContainer"] {
         min-height: 52px !important;
+        height: 52px !important;
+    }
+
+    section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="singleValue"],
+    section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="placeholder"],
+    section[data-testid="stSidebar"] div[data-baseweb="select"] input {
+        font-size: 0.90rem !important;
     }
 }
 </style>
@@ -1398,9 +1454,21 @@ else:
 rec, alias, prod, adh, cust = load_excel(file_bytes)
 
 st.sidebar.header("검색 필터")
-sel_cust = st.sidebar.multiselect("거래처", sorted_unique(rec.get("거래처", pd.Series())), placeholder="Choose options")
-sel_prod = st.sidebar.multiselect("품목코드", sorted_unique(rec.get("품목코드", pd.Series())), placeholder="Choose options")
-sel_adh = st.sidebar.multiselect("점착제코드", sorted_unique(rec.get("점착제코드", pd.Series())), placeholder="Choose options")
+sel_cust = st.sidebar.multiselect(
+    "거래처",
+    sorted_unique(rec.get("거래처", pd.Series())),
+    placeholder="Choose options"
+)
+sel_prod = st.sidebar.multiselect(
+    "품목코드",
+    sorted_unique(rec.get("품목코드", pd.Series())),
+    placeholder="Choose options"
+)
+sel_adh = st.sidebar.multiselect(
+    "점착제코드",
+    sorted_unique(rec.get("점착제코드", pd.Series())),
+    placeholder="Choose options"
+)
 
 date_min = pd.to_datetime(rec["날짜"].min()) if "날짜" in rec.columns else None
 date_max = pd.to_datetime(rec["날짜"].max()) if "날짜" in rec.columns else None
@@ -1685,7 +1753,7 @@ with tab4:
 
                     contribution_rows = []
                     for idx in pivot_prod.index:
-                        prod_code, prod_name, prod_label = idx
+                        prod_code, _, prod_label = idx
                         row = pivot_prod.loc[idx]
 
                         first_vals = [row[c] for c in first_half if c in row.index]
@@ -1989,9 +2057,19 @@ with tab5:
             st.markdown("### 2) 선택 품목별 업체 감소현황")
 
             item_options = top_items["품목표시"].astype(str).tolist()
-            selected_item = st.selectbox("품목 선택", item_options, index=0, key="decline_item_select_v5")
+            selected_item = item_options[0] if len(item_options) > 0 else None
 
             if selected_item:
+                select_col, c1, c2, c3, c4 = st.columns([2.6, 1, 1, 1, 1])
+
+                with select_col:
+                    selected_item = st.selectbox(
+                        "품목 선택",
+                        options=item_options,
+                        index=0,
+                        key="decline_item_select_top_aligned_v5"
+                    )
+
                 item_row = top_items[top_items["품목표시"].astype(str) == str(selected_item)].copy()
                 item_month = item_monthly[item_monthly["품목표시"].astype(str) == str(selected_item)].copy()
                 item_cust = item_customer_monthly[item_customer_monthly["품목표시"].astype(str) == str(selected_item)].copy()
@@ -2001,17 +2079,8 @@ with tab5:
                     customer_return_reason_df["품목표시"].astype(str) == str(selected_item)
                 ].copy()
 
-                select_col, c1, c2, c3, c4 = st.columns([2.6, 1, 1, 1, 1])
-
                 if not item_row.empty:
                     rr = item_row.iloc[0]
-                    with select_col:
-                        st.selectbox(
-                            "품목 선택",
-                            options=item_options,
-                            index=item_options.index(selected_item),
-                            key="decline_item_select_top_aligned_v5"
-                        )
                     with c1:
                         st.metric("품목하락점수", f"{rr['품목하락점수']:.1f}")
                     with c2:
