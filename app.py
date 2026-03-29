@@ -343,7 +343,7 @@ def clean_and_safe_display(
         "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "점착제명",
         "최근날짜", "가로폭이력", "분석_내역", "AI분석", "업체성향", "최근추세",
         "월", "구분", "월표기", "연도", "대표구분", "반품원인", "주요반품원인",
-        "원인추정", "감소원인", "비고", "AI반품분석"
+        "원인추정", "감소원인", "비고", "AI반품분석", "담당부서", "영업담당부서", "담당자"
     }
 
     for col in display_df.columns:
@@ -469,6 +469,15 @@ def sorted_unique(series):
     s = pd.Series(series).astype(str).str.strip()
     s = s[~s.isin(["", "0", "0.0", "nan", "NaN", "None", "<NA>"])]
     return sorted(s.unique())
+
+
+def sorted_unique_safe(series):
+    if series is None:
+        return []
+    s = pd.Series(series).dropna().astype(str).str.strip()
+    s = s[s != ""]
+    s = s[~s.isin(["0", "0.0", "nan", "NaN", "None", "<NA>"])]
+    return sorted(s.unique().tolist())
 
 
 def add_year_month_axis(fig, x_dates):
@@ -800,13 +809,19 @@ def load_excel(file_bytes):
                 "nan": pd.NA, "NaN": pd.NA, "None": pd.NA, "<NA>": pd.NA,
             })
 
-    for c in ["거래처", "품목코드", "점착제코드", "품목명_고객표현", "점착제_고객표현"]:
+    for c in ["거래처", "품목코드", "점착제코드", "품목명_고객표현", "점착제_고객표현", "담당부서", "영업담당부서", "담당자"]:
         if c in rec.columns:
             rec[c] = rec[c].astype(str).str.strip()
 
     for c in ["품목코드", "점착제코드"]:
         normalize(rec, c)
     normalize(rec, "거래처")
+    if "담당부서" in rec.columns:
+        normalize(rec, "담당부서")
+    if "영업담당부서" in rec.columns:
+        normalize(rec, "영업담당부서")
+    if "담당자" in rec.columns:
+        normalize(rec, "담당자")
 
     def map_alias(series, alias_df, typ):
         if alias_df is None or alias_df.empty or series is None:
@@ -1454,6 +1469,31 @@ else:
 rec, alias, prod, adh, cust = load_excel(file_bytes)
 
 st.sidebar.header("검색 필터")
+
+# 담당부서 / 담당자 필터 추가
+dept_col = None
+manager_col = None
+
+if "담당부서" in rec.columns:
+    dept_col = "담당부서"
+elif "영업담당부서" in rec.columns:
+    dept_col = "영업담당부서"
+
+if "담당자" in rec.columns:
+    manager_col = "담당자"
+
+sel_dept = st.sidebar.multiselect(
+    "담당부서",
+    sorted_unique_safe(rec[dept_col]) if dept_col else [],
+    placeholder="Choose options"
+)
+
+sel_manager = st.sidebar.multiselect(
+    "담당자",
+    sorted_unique_safe(rec[manager_col]) if manager_col else [],
+    placeholder="Choose options"
+)
+
 sel_cust = st.sidebar.multiselect(
     "거래처",
     sorted_unique(rec.get("거래처", pd.Series())),
@@ -1482,6 +1522,14 @@ st.sidebar.markdown("---")
 st.sidebar.caption("💡 견적 레퍼런스: 품목코드·점착제코드·기간 필터 위주로 사용하세요.")
 
 q = rec.copy()
+
+# 추가 필터 적용
+if dept_col and sel_dept:
+    q = q[q[dept_col].astype(str).str.strip().isin(sel_dept)]
+
+if manager_col and sel_manager:
+    q = q[q[manager_col].astype(str).str.strip().isin(sel_manager)]
+
 if sel_cust and "거래처" in q.columns:
     q = q[q["거래처"].astype(str).isin(sel_cust)]
 if sel_prod and "품목코드" in q.columns:
@@ -2312,5 +2360,8 @@ with tab6:
     clean_and_safe_display(
         q[raw_cols],
         pinned_cols=["거래처", "품목코드"],
-        text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜", "월", "비고"],
+        text_cols=[
+            "거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력",
+            "최근날짜", "월", "비고", "담당부서", "영업담당부서", "담당자"
+        ],
     )
