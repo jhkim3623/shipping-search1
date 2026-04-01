@@ -468,18 +468,29 @@ def render_banded_table(df, title=None, height=None, pinned_cols=None, text_cols
 def sorted_unique(series):
     if series is None:
         return []
-    s = pd.Series(series).astype(str).str.strip()
-    s = s[~s.isin(["", "0", "0.0", "nan", "NaN", "None", "<NA>"])]
-    return sorted(s.unique())
+
+    s = pd.Series(series)
+    s = s.dropna()
+    s = s.astype(str).str.strip()
+    s = s[~s.isin(["", "0", "0.0", "nan", "NaN", "None", "<NA>", "NaT"])]
+
+    vals = s.tolist()
+    vals = list(dict.fromkeys(vals))
+    return sorted(vals, key=lambda x: str(x))
 
 
 def sorted_unique_safe(series):
     if series is None:
         return []
-    s = pd.Series(series).dropna().astype(str).str.strip()
-    s = s[s != ""]
-    s = s[~s.isin(["0", "0.0", "nan", "NaN", "None", "<NA>"])]
-    return sorted(s.unique().tolist())
+
+    s = pd.Series(series)
+    s = s.dropna()
+    s = s.astype(str).str.strip()
+    s = s[~s.isin(["", "0", "0.0", "nan", "NaN", "None", "<NA>", "NaT"])]
+
+    vals = s.tolist()
+    vals = list(dict.fromkeys(vals))
+    return sorted(vals, key=lambda x: str(x))
 
 
 def add_year_month_axis(fig, x_dates):
@@ -1676,17 +1687,17 @@ sel_manager = st.sidebar.multiselect(
 
 sel_cust = st.sidebar.multiselect(
     "거래처",
-    sorted_unique(rec.get("거래처", pd.Series())),
+    sorted_unique(rec["거래처"]) if "거래처" in rec.columns else [],
     placeholder="Choose options"
 )
 sel_prod = st.sidebar.multiselect(
     "품목코드",
-    sorted_unique(rec.get("품목코드", pd.Series())),
+    sorted_unique(rec["품목코드"]) if "품목코드" in rec.columns else [],
     placeholder="Choose options"
 )
 sel_adh = st.sidebar.multiselect(
     "점착제코드",
-    sorted_unique(rec.get("점착제코드", pd.Series())),
+    sorted_unique(rec["점착제코드"]) if "점착제코드" in rec.columns else [],
     placeholder="Choose options"
 )
 
