@@ -361,16 +361,21 @@ def clean_and_safe_display(
             continue
 
         if pd.api.types.is_numeric_dtype(display_df[col]):
+            # 퍼센트/비율 계열
             if any(k in col for k in ["하락률", "증감률", "비율", "변화율", "CV", "반품율"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%.1f", pinned=pinned)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
+            # 수량/M2 계열
             elif any(k in col for k in ["M2", "수량", "판매량", "총량", "출고량"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%.1f", pinned=pinned)
-            elif any(k in col for k in ["단가", "금액", "매출", "총매출", "평균", "원"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%d", pinned=pinned)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
+            # 점수 계열
             elif any(k in col for k in ["점수", "AI", "우선순위", "통계", "종합"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%.1f", pinned=pinned)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
+            # 금액/단가/매출/평균 계열
+            elif any(k in col for k in ["단가", "금액", "매출", "총매출", "평균", "원"]):
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned)
+            # 그 외 숫자형도 기본 콤마 표시
             else:
-                column_config[col] = st.column_config.NumberColumn(col, format="%d", pinned=pinned)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned)
         else:
             column_config[col] = st.column_config.TextColumn(col, width="medium", pinned=pinned)
 
@@ -455,6 +460,9 @@ def render_banded_table(df, title=None, height=None, pinned_cols=None, text_cols
             num_format[c] = "{:,.0f}"
         elif any(k in c for k in ["하락률", "증감률", "비율", "변화율", "CV", "점수", "반품율"]):
             num_format[c] = "{:,.1f}"
+        else:
+            if pd.api.types.is_numeric_dtype(temp[c]):
+                num_format[c] = "{:,.0f}"
 
     if num_format:
         styled = styled.format(num_format)
@@ -588,11 +596,6 @@ def make_text_position_map(items):
 
 
 def make_indexed_series(df, group_col, value_col, time_col):
-    """
-    변화율 보조 그래프용 지수 데이터 생성
-    - 반환 컬럼 구조를 항상 [group_col, time_col, value_col, "지수값"] 형태로 고정
-    - pandas 버전에 따라 groupby/apply 결과에서 컬럼이 인덱스로 사라지는 문제 방지
-    """
     empty_cols = [group_col, time_col, value_col, "지수값"]
 
     if df is None or len(df) == 0:
@@ -1561,7 +1564,6 @@ def build_customer_sales_analysis(q):
         item_summary["기준월매출"] = 0
         item_summary["최근월매출"] = 0
 
-    # 최근단가 추가
     recent_price = (
         df.sort_values("날짜")
         .groupby(["거래처", "품목표시"], as_index=False)
@@ -1570,7 +1572,6 @@ def build_customer_sales_analysis(q):
     )
     item_summary = item_summary.merge(recent_price, on=["거래처", "품목표시"], how="left")
 
-    # 가로폭이력 추가
     width_hist = (
         df.groupby(["거래처", "품목표시"], as_index=False)["가로폭(mm)"]
         .apply(lambda s: ", ".join([
@@ -2121,7 +2122,7 @@ with tab4:
                             required_cols = {"품목표시", "날짜축", "지수값"}
                             if indexed_df is not None and not indexed_df.empty and required_cols.issubset(set(indexed_df.columns)):
                                 indexed_df["지수라벨"] = indexed_df["지수값"].apply(
-                                    lambda v: "" if pd.isna(v) else f"{v:.0f}"
+                                    lambda v: "" if pd.isna(v) else f"{v:,.0f}"
                                 )
 
                                 fig_idx = go.Figure()
@@ -2144,7 +2145,7 @@ with tab4:
                                         textposition=pos_map.get(prod_label, "top center"),
                                         textfont=dict(size=9),
                                         cliponaxis=False,
-                                        hovertemplate=f"품목: {prod_label}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:.1f}}<extra></extra>",
+                                        hovertemplate=f"품목: {prod_label}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:,.1f}}<extra></extra>",
                                         showlegend=True
                                     ))
 
@@ -2186,7 +2187,7 @@ with tab4:
                             y=comp_df["전반부_평균"],
                             name="전반부 평균",
                             marker_color="#3498db",
-                            text=[f"{v:,}" for v in comp_df["전반부_평균"]],
+                            text=[f"{v:,.0f}" for v in comp_df["전반부_평균"]],
                             textposition="outside"
                         ))
                         fig_bar.add_trace(go.Bar(
@@ -2194,7 +2195,7 @@ with tab4:
                             y=comp_df["후반부_평균"],
                             name="후반부 평균",
                             marker_color="#e74c3c",
-                            text=[f"{v:,}" for v in comp_df["후반부_평균"]],
+                            text=[f"{v:,.0f}" for v in comp_df["후반부_평균"]],
                             textposition="outside"
                         ))
                         fig_bar.update_layout(
@@ -2494,11 +2495,11 @@ with tab6:
                 if not item_row.empty:
                     rr = item_row.iloc[0]
                     with c1:
-                        st.metric("품목하락점수", f"{rr['품목하락점수']:.1f}")
+                        st.metric("품목하락점수", f"{rr['품목하락점수']:,.1f}")
                     with c2:
                         st.metric("감소금액", f"{int(rr['감소금액']):,} 원")
                     with c3:
-                        st.metric("하락률", f"{rr['하락률(%)']:.1f}%")
+                        st.metric("하락률", f"{rr['하락률(%)']:,.1f}%")
                     with c4:
                         st.metric("반품금액", f"{int(rr['반품금액']):,} 원")
 
@@ -2625,7 +2626,7 @@ with tab6:
                         if not selected_row.empty:
                             sr = selected_row.iloc[0]
                             with m1:
-                                st.metric("순위", f"{int(sr['순위'])}")
+                                st.metric("순위", f"{int(sr['순위']):,}")
                             with m2:
                                 st.metric("감소금액", f"{int(sr['감소금액']):,} 원")
                             with m3:
