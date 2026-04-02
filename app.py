@@ -17,13 +17,19 @@ st.markdown("""
     padding-right: 0.7rem;
     max-width: 100%;
 }
+
+/* 가로 row 정렬 */
 div[data-testid="stHorizontalBlock"] {
     gap: 0.6rem;
     align-items: flex-end !important;
 }
+
+/* column 내부 wrapper 높이 안정화 */
 div[data-testid="column"] > div {
     width: 100% !important;
 }
+
+/* 라벨 공통 */
 label[data-testid="stWidgetLabel"] {
     margin-bottom: 0.18rem !important;
     padding-bottom: 0 !important;
@@ -35,6 +41,8 @@ label[data-testid="stWidgetLabel"] p {
     color: #4b5563 !important;
     font-weight: 600 !important;
 }
+
+/* metric box */
 div[data-testid="stMetric"] {
     background: #fafafa;
     border: 1px solid #eeeeee;
@@ -47,6 +55,8 @@ div[data-testid="stMetric"] {
     justify-content: center;
     box-sizing: border-box;
 }
+
+/* metric 내부 */
 div[data-testid="stMetric"] > div {
     justify-content: center !important;
 }
@@ -61,6 +71,8 @@ div[data-testid="stMetricValue"] {
     line-height: 1.05 !important;
     color: #111827 !important;
 }
+
+/* select 공통 wrapper */
 div[data-baseweb="select"] {
     min-height: 56px !important;
 }
@@ -74,6 +86,8 @@ div[data-baseweb="select"] > div {
     padding-top: 0 !important;
     padding-bottom: 0 !important;
 }
+
+/* select 내부 값 세로 중앙 */
 div[data-baseweb="select"] div[class*="valueContainer"] {
     min-height: 56px !important;
     height: 56px !important;
@@ -101,6 +115,8 @@ div[data-baseweb="select"] input::placeholder {
     color: #6b7280 !important;
     opacity: 1 !important;
 }
+
+/* choose options 복구 */
 div[data-baseweb="select"] div[class*="placeholder"] {
     color: #6b7280 !important;
     opacity: 1 !important;
@@ -110,12 +126,16 @@ div[data-baseweb="select"] div[class*="placeholder"] {
     display: flex !important;
     align-items: center !important;
 }
+
+/* multiselect tag 정렬 */
 div[data-baseweb="tag"] {
     display: flex !important;
     align-items: center !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
 }
+
+/* 사이드바 필터 글씨 선명하게 */
 section[data-testid="stSidebar"] label[data-testid="stWidgetLabel"] p {
     color: #374151 !important;
     font-weight: 700 !important;
@@ -158,15 +178,20 @@ section[data-testid="stSidebar"] div[data-baseweb="select"] input::placeholder {
     color: #6b7280 !important;
     opacity: 1 !important;
 }
+
+/* 멀티셀렉트 내부 텍스트 잘림 방지 */
 section[data-testid="stSidebar"] div[data-baseweb="select"] * {
     overflow: visible !important;
 }
+
+/* dataframe */
 div[data-testid="stDataFrame"] {
     width: 100%;
 }
 [data-testid="column"] {
     width: 100% !important;
 }
+
 .app-main-title {
     display: block;
     font-size: 1.8rem;
@@ -181,6 +206,7 @@ div[data-testid="stDataFrame"] {
     font-weight: 700;
     margin-bottom: 0.2rem;
 }
+
 @media (max-width: 1024px) {
     .block-container {
         padding-left: 0.45rem;
@@ -220,6 +246,7 @@ div[data-testid="stDataFrame"] {
         min-height: 52px !important;
         height: 52px !important;
     }
+
     section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="singleValue"],
     section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="placeholder"],
     section[data-testid="stSidebar"] div[data-baseweb="select"] input {
@@ -230,9 +257,9 @@ div[data-testid="stDataFrame"] {
 """, unsafe_allow_html=True)
 
 
-# =========================================================
+# ══════════════════════════════════════════════════════════
 # 공통 유틸
-# =========================================================
+# ══════════════════════════════════════════════════════════
 def calc_table_height(df, min_rows=3, max_rows=18, row_px=35, header_px=38):
     if df is None or len(df) == 0:
         rows = min_rows
@@ -241,250 +268,22 @@ def calc_table_height(df, min_rows=3, max_rows=18, row_px=35, header_px=38):
     return header_px + rows * row_px
 
 
-def sorted_unique(series):
-    if series is None:
-        return []
-    try:
-        s = pd.Series(series).dropna().astype(str).str.strip()
-        s = s[~s.isin(["", "0", "0.0", "nan", "NaN", "None", "<NA>", "NaT"])]
-        vals = list(dict.fromkeys(s.tolist()))
-        return sorted(vals, key=lambda x: str(x))
-    except Exception:
-        return []
-
-
 def safe_make_product_label(df):
     temp = df.copy()
     if "품목코드" not in temp.columns:
         temp["품목코드"] = ""
     if "품목명(공식)" not in temp.columns:
         temp["품목명(공식)"] = ""
-    temp["품목코드"] = temp["품목코드"].fillna("").astype(str)
+
+    temp["품목코드"] = temp["품목코드"].astype(str)
     temp["품목명(공식)"] = temp["품목명(공식)"].fillna("").astype(str)
+
     temp["품목표시"] = np.where(
         temp["품목명(공식)"].str.strip() != "",
         temp["품목코드"] + " | " + temp["품목명(공식)"],
         temp["품목코드"]
     )
     return temp
-
-
-def sales_to_manwon_label(value):
-    if pd.isna(value):
-        return ""
-    try:
-        return f"{int(round(float(value) / 10000.0, 0)):,}"
-    except Exception:
-        return ""
-
-
-def calc_cv(series):
-    s = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
-    if len(s) == 0:
-        return 0.0
-    m = s.mean()
-    if m == 0 or pd.isna(m):
-        return 0.0
-    return float(s.std(ddof=0) / m)
-
-
-def calc_slope(values):
-    y = pd.to_numeric(pd.Series(values), errors="coerce").fillna(0).values.astype(float)
-    if len(y) < 2:
-        return 0.0
-    if np.all(np.isclose(y, y[0])):
-        return 0.0
-    x = np.arange(len(y))
-    return float(np.polyfit(x, y, 1)[0])
-
-
-def scale_to_100(series, reverse=False):
-    s = pd.to_numeric(pd.Series(series), errors="coerce").fillna(0)
-    if len(s) == 0:
-        return s
-    if s.nunique() <= 1:
-        return pd.Series([50.0] * len(s), index=s.index)
-    mn, mx = s.min(), s.max()
-    if mx == mn:
-        out = pd.Series([50.0] * len(s), index=s.index)
-    else:
-        out = ((s - mn) / (mx - mn)) * 100.0
-    if reverse:
-        out = 100.0 - out
-    return out.clip(0, 100)
-
-
-def build_color_map(items):
-    palette = [
-        "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e",
-        "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"
-    ]
-    items = [str(x) for x in items]
-    return {item: palette[i % len(palette)] for i, item in enumerate(items)}
-
-
-def build_month_axis_frame(months):
-    month_list = sorted([str(m) for m in months if pd.notna(m) and str(m).strip() != ""])
-    axis_df = pd.DataFrame({"월": month_list})
-    if axis_df.empty:
-        axis_df["날짜축"] = pd.NaT
-        return axis_df
-    axis_df["날짜축"] = pd.to_datetime(axis_df["월"] + "-01", errors="coerce")
-    axis_df = axis_df.dropna(subset=["날짜축"]).sort_values("날짜축").reset_index(drop=True)
-    return axis_df
-
-
-def align_monthly_series(base_month_df, data_df, value_col):
-    if base_month_df is None or base_month_df.empty:
-        return pd.DataFrame(columns=["월", "날짜축", value_col])
-
-    out = base_month_df.copy()
-
-    if data_df is None or data_df.empty or value_col not in data_df.columns or "월" not in data_df.columns:
-        out[value_col] = 0
-        return out
-
-    temp = data_df.copy()
-    temp["월"] = temp["월"].astype(str)
-    temp[value_col] = pd.to_numeric(temp[value_col], errors="coerce").fillna(0)
-    temp = temp.groupby("월", as_index=False)[value_col].sum()
-    out = out.merge(temp, on="월", how="left")
-    out[value_col] = pd.to_numeric(out[value_col], errors="coerce").fillna(0)
-    return out
-
-
-def make_text_position_map(items):
-    positions = ["top center", "bottom center", "middle right", "middle left"]
-    return {str(item): positions[i % len(positions)] for i, item in enumerate(items)}
-
-
-def make_indexed_series(df, group_col, value_col, time_col):
-    if df is None or df.empty:
-        return pd.DataFrame(columns=[group_col, time_col, value_col, "지수값"])
-
-    required = {group_col, value_col, time_col}
-    if not required.issubset(set(df.columns)):
-        return pd.DataFrame(columns=[group_col, time_col, value_col, "지수값"])
-
-    temp = df.copy()
-    temp[time_col] = pd.to_datetime(temp[time_col], errors="coerce")
-    temp[value_col] = pd.to_numeric(temp[value_col], errors="coerce").fillna(0)
-    temp[group_col] = temp[group_col].astype(str)
-    temp = temp.dropna(subset=[time_col]).sort_values([group_col, time_col])
-
-    def _calc(g):
-        g = g.copy()
-        base_candidates = g[value_col].replace(0, np.nan).dropna()
-        if len(base_candidates) == 0:
-            g["지수값"] = np.nan
-        else:
-            base = base_candidates.iloc[0]
-            if pd.isna(base) or base == 0:
-                g["지수값"] = np.nan
-            else:
-                g["지수값"] = (g[value_col] / base) * 100
-        return g
-
-    return temp.groupby(group_col, group_keys=False).apply(_calc).reset_index(drop=True)
-
-
-def add_year_month_axis(fig, x_dates):
-    dt = pd.to_datetime(pd.Series(x_dates), errors="coerce").dropna().sort_values().unique()
-    if len(dt) == 0:
-        return fig
-
-    dt = pd.to_datetime(dt)
-    tickvals = list(dt)
-    ticktext = [pd.Timestamp(d).strftime("%m") for d in dt]
-
-    fig.update_xaxes(
-        tickmode="array",
-        tickvals=tickvals,
-        ticktext=ticktext,
-        tickangle=0,
-        title="",
-        showgrid=True,
-        zeroline=False,
-        automargin=True
-    )
-
-    years = sorted(pd.Series(dt).dt.year.unique())
-    for y in years:
-        year_dates = [d for d in dt if pd.Timestamp(d).year == y]
-        if not year_dates:
-            continue
-        mid = year_dates[len(year_dates) // 2]
-        fig.add_annotation(
-            x=mid,
-            y=-0.20,
-            xref="x",
-            yref="paper",
-            text=str(y),
-            showarrow=False,
-            font=dict(size=12, color="black"),
-        )
-        fig.add_vline(
-            x=year_dates[0],
-            line_width=1,
-            line_dash="dot",
-            line_color="rgba(120,120,120,0.5)"
-        )
-
-    fig.update_layout(margin=dict(l=20, r=40, t=35, b=90))
-    return fig
-
-
-def apply_mobile_friendly_line_layout(fig, x_dates, y_title="판매금액(원)", height=380):
-    x_dates = pd.to_datetime(pd.Series(x_dates), errors="coerce").dropna().sort_values()
-    fig.update_traces(cliponaxis=False)
-
-    if len(x_dates) > 0:
-        x_min = x_dates.min() - pd.Timedelta(days=10)
-        x_max = x_dates.max() + pd.Timedelta(days=12)
-    else:
-        x_min = None
-        x_max = None
-
-    fig.update_layout(
-        height=height,
-        yaxis_title=y_title,
-        yaxis_tickformat=",",
-        margin=dict(l=20, r=45, t=35, b=90),
-        xaxis=dict(
-            automargin=True,
-            range=[x_min, x_max] if x_min is not None and x_max is not None else None,
-            fixedrange=False
-        ),
-        yaxis=dict(automargin=True),
-    )
-    return add_year_month_axis(fig, x_dates)
-
-
-def should_show_helper_chart(top_product_monthly):
-    if top_product_monthly is None or top_product_monthly.empty:
-        return False, 0.0
-
-    if "품목표시" not in top_product_monthly.columns or "금액(원)" not in top_product_monthly.columns:
-        return False, 0.0
-
-    temp = (
-        top_product_monthly.groupby("품목표시", as_index=False)["금액(원)"]
-        .sum()
-        .rename(columns={"금액(원)": "총매출"})
-    )
-    temp = temp[temp["총매출"] > 0].copy()
-
-    if len(temp) < 2:
-        return False, 0.0
-
-    max_v = temp["총매출"].max()
-    min_v = temp["총매출"].min()
-
-    if min_v <= 0:
-        return True, np.inf
-
-    ratio = max_v / min_v
-    return bool(ratio >= 5), ratio
 
 
 def clean_and_safe_display(
@@ -664,6 +463,258 @@ def render_banded_table(df, title=None, height=None, pinned_cols=None, text_cols
     st.dataframe(styled, use_container_width=True, height=final_height, hide_index=True)
 
 
+def sorted_unique(series):
+    if series is None:
+        return []
+    try:
+        s = pd.Series(series).dropna().astype(str).str.strip()
+        s = s[~s.isin(["", "0", "0.0", "nan", "NaN", "None", "<NA>", "NaT"])]
+        vals = list(dict.fromkeys(s.tolist()))
+        return sorted(vals, key=lambda x: str(x))
+    except Exception:
+        return []
+
+
+def add_year_month_axis(fig, x_dates):
+    dt = pd.to_datetime(pd.Series(x_dates), errors="coerce").dropna().sort_values().unique()
+    if len(dt) == 0:
+        return fig
+
+    dt = pd.to_datetime(dt)
+    tickvals = list(dt)
+    ticktext = [pd.Timestamp(d).strftime("%m") for d in dt]
+
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=tickvals,
+        ticktext=ticktext,
+        tickangle=0,
+        title="",
+        showgrid=True,
+        zeroline=False,
+        automargin=True
+    )
+
+    years = sorted(pd.Series(dt).dt.year.unique())
+    for y in years:
+        year_dates = [d for d in dt if pd.Timestamp(d).year == y]
+        if not year_dates:
+            continue
+        mid = year_dates[len(year_dates) // 2]
+        fig.add_annotation(
+            x=mid,
+            y=-0.20,
+            xref="x",
+            yref="paper",
+            text=str(y),
+            showarrow=False,
+            font=dict(size=12, color="black"),
+        )
+        fig.add_vline(
+            x=year_dates[0],
+            line_width=1,
+            line_dash="dot",
+            line_color="rgba(120,120,120,0.5)"
+        )
+
+    fig.update_layout(margin=dict(l=20, r=40, t=35, b=90))
+    return fig
+
+
+def apply_mobile_friendly_line_layout(fig, x_dates, y_title="판매금액(원)", height=380):
+    x_dates = pd.to_datetime(pd.Series(x_dates), errors="coerce").dropna().sort_values()
+    fig.update_traces(cliponaxis=False)
+
+    if len(x_dates) > 0:
+        x_min = x_dates.min() - pd.Timedelta(days=10)
+        x_max = x_dates.max() + pd.Timedelta(days=12)
+    else:
+        x_min = None
+        x_max = None
+
+    fig.update_layout(
+        height=height,
+        yaxis_title=y_title,
+        yaxis_tickformat=",",
+        margin=dict(l=20, r=45, t=35, b=90),
+        xaxis=dict(
+            automargin=True,
+            range=[x_min, x_max] if x_min is not None and x_max is not None else None,
+            fixedrange=False
+        ),
+        yaxis=dict(automargin=True),
+    )
+    return add_year_month_axis(fig, x_dates)
+
+
+def build_month_axis_frame(months):
+    month_list = sorted([str(m) for m in months if pd.notna(m) and str(m).strip() != ""])
+    axis_df = pd.DataFrame({"월": month_list})
+    if axis_df.empty:
+        axis_df["날짜축"] = pd.NaT
+        return axis_df
+    axis_df["날짜축"] = pd.to_datetime(axis_df["월"] + "-01", errors="coerce")
+    axis_df = axis_df.dropna(subset=["날짜축"]).sort_values("날짜축").reset_index(drop=True)
+    return axis_df
+
+
+def align_monthly_series(base_month_df, data_df, value_col):
+    if base_month_df is None or base_month_df.empty:
+        return pd.DataFrame(columns=["월", "날짜축", value_col])
+
+    out = base_month_df.copy()
+
+    if data_df is None or data_df.empty or value_col not in data_df.columns or "월" not in data_df.columns:
+        out[value_col] = 0
+        return out
+
+    temp = data_df.copy()
+    temp["월"] = temp["월"].astype(str)
+    temp = temp.groupby("월", as_index=False)[value_col].sum()
+    out = out.merge(temp, on="월", how="left")
+    out[value_col] = pd.to_numeric(out[value_col], errors="coerce").fillna(0)
+    return out
+
+
+def sales_to_manwon_label(value):
+    if pd.isna(value):
+        return ""
+    return f"{int(round(float(value) / 10000.0, 0)):,}"
+
+
+def make_text_position_map(items):
+    positions = ["top center", "bottom center", "middle right", "middle left"]
+    return {str(item): positions[i % len(positions)] for i, item in enumerate(items)}
+
+
+def make_indexed_series(df, group_col, value_col, time_col):
+    """
+    변화율 보조 그래프용 지수 데이터 생성
+    - 반환 컬럼 구조를 항상 [group_col, time_col, value_col, "지수값"] 형태로 고정
+    - pandas 버전에 따라 groupby/apply 결과에서 컬럼이 인덱스로 사라지는 문제 방지
+    """
+    empty_cols = [group_col, time_col, value_col, "지수값"]
+
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=empty_cols)
+
+    required = {group_col, value_col, time_col}
+    if not required.issubset(set(df.columns)):
+        return pd.DataFrame(columns=empty_cols)
+
+    temp = df.copy()
+
+    temp[group_col] = temp[group_col].astype(str)
+    temp[time_col] = pd.to_datetime(temp[time_col], errors="coerce")
+    temp[value_col] = pd.to_numeric(temp[value_col], errors="coerce").fillna(0)
+
+    temp = temp.dropna(subset=[time_col]).copy()
+    if temp.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    temp = temp.sort_values([group_col, time_col]).reset_index(drop=True)
+
+    out_frames = []
+    for _, sub in temp.groupby(group_col, dropna=False):
+        sub = sub[[group_col, time_col, value_col]].copy()
+
+        base_candidates = sub[value_col].replace(0, np.nan).dropna()
+        if len(base_candidates) == 0:
+            sub["지수값"] = np.nan
+        else:
+            base = base_candidates.iloc[0]
+            if pd.isna(base) or base == 0:
+                sub["지수값"] = np.nan
+            else:
+                sub["지수값"] = (sub[value_col] / base) * 100.0
+
+        out_frames.append(sub)
+
+    if not out_frames:
+        return pd.DataFrame(columns=empty_cols)
+
+    result = pd.concat(out_frames, ignore_index=True)
+
+    for col in empty_cols:
+        if col not in result.columns:
+            result[col] = np.nan
+
+    result = result[empty_cols].copy()
+    return result
+
+
+def should_show_helper_chart(top_product_monthly):
+    if top_product_monthly is None or top_product_monthly.empty:
+        return False, 0.0
+
+    if "품목표시" not in top_product_monthly.columns or "금액(원)" not in top_product_monthly.columns:
+        return False, 0.0
+
+    temp = (
+        top_product_monthly.groupby("품목표시", as_index=False)["금액(원)"]
+        .sum()
+        .rename(columns={"금액(원)": "총매출"})
+    )
+    temp = temp[temp["총매출"] > 0].copy()
+
+    if len(temp) < 2:
+        return False, 0.0
+
+    max_v = temp["총매출"].max()
+    min_v = temp["총매출"].min()
+
+    if min_v <= 0:
+        return True, np.inf
+
+    ratio = max_v / min_v
+    return bool(ratio >= 5), ratio
+
+
+def calc_cv(series):
+    s = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
+    if len(s) == 0:
+        return 0.0
+    m = s.mean()
+    if m == 0 or pd.isna(m):
+        return 0.0
+    return float(s.std(ddof=0) / m)
+
+
+def calc_slope(values):
+    y = pd.to_numeric(pd.Series(values), errors="coerce").fillna(0).values.astype(float)
+    if len(y) < 2:
+        return 0.0
+    if np.all(np.isclose(y, y[0])):
+        return 0.0
+    x = np.arange(len(y))
+    return float(np.polyfit(x, y, 1)[0])
+
+
+def scale_to_100(series, reverse=False):
+    s = pd.to_numeric(pd.Series(series), errors="coerce").fillna(0)
+    if len(s) == 0:
+        return s
+    if s.nunique() <= 1:
+        return pd.Series([50.0] * len(s), index=s.index)
+    mn, mx = s.min(), s.max()
+    if mx == mn:
+        out = pd.Series([50.0] * len(s), index=s.index)
+    else:
+        out = ((s - mn) / (mx - mn)) * 100.0
+    if reverse:
+        out = 100.0 - out
+    return out.clip(0, 100)
+
+
+def build_color_map(items):
+    palette = [
+        "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e",
+        "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"
+    ]
+    items = [str(x) for x in items]
+    return {item: palette[i % len(palette)] for i, item in enumerate(items)}
+
+
 def build_return_base(df):
     temp = df.copy()
     if "비고" not in temp.columns:
@@ -748,9 +799,6 @@ def infer_ai_return_analysis(row):
     return " | ".join(reasons)
 
 
-# =========================================================
-# 데이터 로드
-# =========================================================
 @st.cache_data
 def load_excel(file_bytes):
     xls = pd.ExcelFile(BytesIO(file_bytes))
@@ -852,8 +900,8 @@ def load_excel(file_bytes):
     tmp = rec.copy()
     tmp["_cs"] = tmp["거래처"].astype(str).fillna("") if "거래처" in tmp.columns else ""
     tmp["_ps"] = tmp["품목코드"].astype(str).fillna("") if "품목코드" in tmp.columns else ""
-    sort_cols = ["_cs", "_ps"] + (["날짜"] if "날짜" in tmp.columns else [])
-    tmp = tmp.sort_values(sort_cols, kind="mergesort")
+    sc = ["_cs", "_ps"] + (["날짜"] if "날짜" in tmp.columns else [])
+    tmp = tmp.sort_values(sc, kind="mergesort")
 
     if "단가(원/M2)" in tmp.columns and {"거래처", "품목코드"} <= set(tmp.columns):
         _t = tmp.dropna(subset=["단가(원/M2)"]).groupby(
@@ -889,23 +937,15 @@ def load_excel(file_bytes):
     else:
         rec["가로폭이력"] = pd.NA
 
-    rec = safe_make_product_label(rec)
     return rec, alias, prod, adh, cust
 
 
-# =========================================================
-# 분석 캐시 / 탭 로직
-# =========================================================
 @st.cache_data(show_spinner=False)
 def build_analysis_cache(q):
     df = q.copy()
-    df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
-    df = df[df["날짜"].notna()].copy()
-    df["월"] = df["날짜"].dt.strftime("%Y-%m")
+    df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
     df = df[df["월"].notna() & (df["월"] != "")].copy()
     df = safe_make_product_label(df)
-
-    df["금액(원)"] = pd.to_numeric(df["금액(원)"], errors="coerce").fillna(0)
 
     monthly_sales = (
         df.groupby(["거래처", "월"], dropna=False)["금액(원)"]
@@ -924,7 +964,7 @@ def build_analysis_cache(q):
     product_monthly["날짜축"] = pd.to_datetime(product_monthly["월"] + "-01")
     product_monthly["만원라벨"] = product_monthly["금액(원)"].apply(sales_to_manwon_label)
 
-    all_months = sorted(df["월"].dropna().unique().tolist())
+    all_months = sorted(df["월"].unique().tolist())
     return df, monthly_sales, customer_total_monthly, product_monthly, all_months
 
 
@@ -1295,9 +1335,7 @@ def build_return_decline_item_analysis(q):
         return {}
 
     df = q.copy()
-    df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
-    df = df[df["날짜"].notna()].copy()
-    df["월"] = df["날짜"].dt.strftime("%Y-%m")
+    df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
     df = df[df["월"].notna() & (df["월"] != "")].copy()
     df = safe_make_product_label(df)
     df = build_return_base(df)
@@ -1454,7 +1492,6 @@ def build_customer_sales_analysis(q):
 
     df = q.copy()
     df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
-    df = df[df["날짜"].notna()].copy()
     df["월"] = df["날짜"].dt.strftime("%Y-%m")
     df = df[df["월"].notna() & (df["월"] != "")].copy()
     df = safe_make_product_label(df)
@@ -1494,32 +1531,14 @@ def build_customer_sales_analysis(q):
         .reset_index(drop=True)
     )
 
-    recent_unit = (
-        df.sort_values("날짜")
-        .groupby(["거래처", "품목표시"], as_index=False)
-        .tail(1)[["거래처", "품목표시", "단가(원/M2)", "가로폭(mm)", "날짜"]]
-        .rename(columns={
-            "단가(원/M2)": "최근단가",
-            "가로폭(mm)": "최근가로폭",
-            "날짜": "최근일자"
-        })
-    )
-
-    width_hist = (
-        df.groupby(["거래처", "품목표시"], as_index=False)["가로폭(mm)"]
-        .apply(lambda s: ", ".join([
-            str(int(v)) if pd.notna(v) and float(v).is_integer() else str(v)
-            for v in pd.Series(s).dropna().unique()
-        ]))
-        .reset_index()
-        .rename(columns={"가로폭(mm)": "가로폭이력"})
-    )
-
     item_summary = (
         df.groupby(["거래처", "품목표시"], as_index=False)
         .agg(
             총매출액=("금액(원)", "sum"),
             총판매량=("수량(M2)", "sum"),
+            평균단가=("단가(원/M2)", "mean"),
+            최근가로폭=("가로폭(mm)", lambda s: s.dropna().iloc[-1] if len(s.dropna()) > 0 else np.nan),
+            최근일자=("날짜", "max"),
         )
     )
 
@@ -1542,7 +1561,25 @@ def build_customer_sales_analysis(q):
         item_summary["기준월매출"] = 0
         item_summary["최근월매출"] = 0
 
-    item_summary = item_summary.merge(recent_unit, on=["거래처", "품목표시"], how="left")
+    # 최근단가 추가
+    recent_price = (
+        df.sort_values("날짜")
+        .groupby(["거래처", "품목표시"], as_index=False)
+        .tail(1)[["거래처", "품목표시", "단가(원/M2)"]]
+        .rename(columns={"단가(원/M2)": "최근단가"})
+    )
+    item_summary = item_summary.merge(recent_price, on=["거래처", "품목표시"], how="left")
+
+    # 가로폭이력 추가
+    width_hist = (
+        df.groupby(["거래처", "품목표시"], as_index=False)["가로폭(mm)"]
+        .apply(lambda s: ", ".join([
+            str(int(v)) if pd.notna(v) and float(v).is_integer() else str(v)
+            for v in pd.Series(s).dropna().unique()
+        ]))
+        .reset_index()
+        .rename(columns={"가로폭(mm)": "가로폭이력"})
+    )
     item_summary = item_summary.merge(width_hist, on=["거래처", "품목표시"], how="left")
 
     item_summary["기준월매출"] = pd.to_numeric(item_summary["기준월매출"], errors="coerce").fillna(0)
@@ -1553,11 +1590,7 @@ def build_customer_sales_analysis(q):
         ((item_summary["최근월매출"] - item_summary["기준월매출"]) / item_summary["기준월매출"]) * 100.0
     )
 
-    item_summary = item_summary.sort_values(
-        ["거래처", "총매출액", "품목표시"],
-        ascending=[True, False, True]
-    ).reset_index(drop=True)
-
+    item_summary = item_summary.sort_values(["거래처", "총매출액", "품목표시"], ascending=[True, False, True]).reset_index(drop=True)
     all_months = sorted(df["월"].dropna().astype(str).unique().tolist())
 
     return {
@@ -1569,9 +1602,6 @@ def build_customer_sales_analysis(q):
     }
 
 
-# =========================================================
-# 메인
-# =========================================================
 DEFAULT_FILE = "data.xlsx"
 
 st.markdown('<div class="app-main-title">출고 이력 검색(거래처/품목/가로폭/점착제)</div>', unsafe_allow_html=True)
@@ -2087,58 +2117,66 @@ with tab4:
                                 value_col="금액(원)",
                                 time_col="날짜축"
                             )
-                            indexed_df["지수라벨"] = indexed_df["지수값"].apply(
-                                lambda v: "" if pd.isna(v) else f"{v:.0f}"
-                            )
 
-                            fig_idx = go.Figure()
-                            for prod_label in top_products:
-                                sub = indexed_df[
-                                    indexed_df["품목표시"].astype(str) == str(prod_label)
-                                ].sort_values("날짜축").copy()
-
-                                if sub.empty:
-                                    continue
-
-                                fig_idx.add_trace(go.Scatter(
-                                    x=sub["날짜축"],
-                                    y=sub["지수값"],
-                                    mode="lines+markers+text",
-                                    name=prod_label,
-                                    line=dict(width=2),
-                                    marker=dict(size=7),
-                                    text=sub["지수라벨"],
-                                    textposition=pos_map.get(prod_label, "top center"),
-                                    textfont=dict(size=9),
-                                    cliponaxis=False,
-                                    hovertemplate=f"품목: {prod_label}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:.1f}}<extra></extra>",
-                                    showlegend=True
-                                ))
-
-                            fig_idx.add_hline(
-                                y=100,
-                                line_dash="dash",
-                                line_color="gray",
-                                opacity=0.7
-                            )
-
-                            fig_idx = apply_mobile_friendly_line_layout(
-                                fig_idx,
-                                indexed_df["날짜축"],
-                                y_title="지수값",
-                                height=460
-                            )
-                            fig_idx.update_layout(
-                                title=f"품목간 매출 규모 차이가 커서 추가 표시 (최대/최소 약 {scale_ratio:.1f}배)",
-                                legend=dict(
-                                    orientation="h",
-                                    yanchor="bottom",
-                                    y=-0.35,
-                                    x=0,
-                                    xanchor="left"
+                            required_cols = {"품목표시", "날짜축", "지수값"}
+                            if indexed_df is not None and not indexed_df.empty and required_cols.issubset(set(indexed_df.columns)):
+                                indexed_df["지수라벨"] = indexed_df["지수값"].apply(
+                                    lambda v: "" if pd.isna(v) else f"{v:.0f}"
                                 )
-                            )
-                            st.plotly_chart(fig_idx, use_container_width=True, key=f"tab4_helper_{selected_cust_name}")
+
+                                fig_idx = go.Figure()
+                                for prod_label in top_products:
+                                    sub = indexed_df[
+                                        indexed_df["품목표시"].astype(str) == str(prod_label)
+                                    ].sort_values("날짜축").copy()
+
+                                    if sub.empty:
+                                        continue
+
+                                    fig_idx.add_trace(go.Scatter(
+                                        x=sub["날짜축"],
+                                        y=sub["지수값"],
+                                        mode="lines+markers+text",
+                                        name=prod_label,
+                                        line=dict(width=2),
+                                        marker=dict(size=7),
+                                        text=sub["지수라벨"],
+                                        textposition=pos_map.get(prod_label, "top center"),
+                                        textfont=dict(size=9),
+                                        cliponaxis=False,
+                                        hovertemplate=f"품목: {prod_label}<br>월: %{{x|%Y-%m}}<br>지수: %{{y:.1f}}<extra></extra>",
+                                        showlegend=True
+                                    ))
+
+                                if len(fig_idx.data) > 0:
+                                    fig_idx.add_hline(
+                                        y=100,
+                                        line_dash="dash",
+                                        line_color="gray",
+                                        opacity=0.7
+                                    )
+
+                                    fig_idx = apply_mobile_friendly_line_layout(
+                                        fig_idx,
+                                        indexed_df["날짜축"],
+                                        y_title="지수값",
+                                        height=460
+                                    )
+                                    fig_idx.update_layout(
+                                        title=f"품목간 매출 규모 차이가 커서 추가 표시 (최대/최소 약 {scale_ratio:.1f}배)",
+                                        legend=dict(
+                                            orientation="h",
+                                            yanchor="bottom",
+                                            y=-0.35,
+                                            x=0,
+                                            xanchor="left"
+                                        )
+                                    )
+                                    st.plotly_chart(fig_idx, use_container_width=True, key=f"tab4_helper_{selected_cust_name}")
+                                else:
+                                    st.info("변화율 보조 그래프를 생성할 데이터가 없습니다.")
+                            else:
+                                st.info("변화율 보조 그래프를 생성할 데이터가 없습니다.")
 
                     if not contribution_df.empty:
                         comp_df = contribution_df.head(12).copy()
@@ -2319,12 +2357,17 @@ with tab5:
                             aux["날짜축"] = pd.to_datetime(aux["월"] + "-01", errors="coerce")
                             indexed_df = make_indexed_series(aux, "품목표시", "매출액", "날짜축")
 
-                            if not indexed_df.empty:
+                            required_cols = {"품목표시", "날짜축", "지수값"}
+                            if indexed_df is None or indexed_df.empty or not required_cols.issubset(set(indexed_df.columns)):
+                                st.info("변화율 보조 그래프를 생성할 데이터가 없습니다.")
+                            else:
                                 fig_idx = go.Figure()
+
                                 for item_name in top_items:
                                     sub = indexed_df[indexed_df["품목표시"].astype(str) == str(item_name)].copy()
                                     if sub.empty:
                                         continue
+
                                     fig_idx.add_trace(go.Scatter(
                                         x=sub["날짜축"],
                                         y=sub["지수값"],
@@ -2332,15 +2375,18 @@ with tab5:
                                         name=item_name
                                     ))
 
-                                fig_idx.add_hline(y=100, line_dash="dash", line_color="gray")
-                                fig_idx.update_layout(
-                                    height=430,
-                                    margin=dict(l=30, r=30, t=30, b=30),
-                                    xaxis_title="월",
-                                    yaxis_title="지수(기준월=100)",
-                                    hovermode="x unified"
-                                )
-                                st.plotly_chart(fig_idx, use_container_width=True)
+                                if len(fig_idx.data) == 0:
+                                    st.info("변화율 보조 그래프를 생성할 데이터가 없습니다.")
+                                else:
+                                    fig_idx.add_hline(y=100, line_dash="dash", line_color="gray")
+                                    fig_idx.update_layout(
+                                        height=430,
+                                        margin=dict(l=30, r=30, t=30, b=30),
+                                        xaxis_title="월",
+                                        yaxis_title="지수(기준월=100)",
+                                        hovermode="x unified"
+                                    )
+                                    st.plotly_chart(fig_idx, use_container_width=True)
 
                     product_options = show_df["품목표시"].dropna().astype(str).tolist()
                     if product_options:
