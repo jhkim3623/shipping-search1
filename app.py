@@ -286,6 +286,51 @@ def safe_make_product_label(df):
     return temp
 
 
+def _estimate_display_width(display_df, col, is_text=False):
+    col = str(col)
+    header_len = len(col)
+
+    try:
+        s = display_df[col]
+    except Exception:
+        return "medium"
+
+    if len(s) == 0:
+        sample_max_len = header_len
+    else:
+        sample = s.head(200)
+
+        if is_text:
+            vals = sample.astype(str).fillna("").replace(["nan", "NaN", "None", "<NA>", "NaT"], "")
+            sample_max_len = max([header_len] + [len(v) for v in vals.tolist()] + [0])
+        else:
+            vals = sample.astype(str).fillna("")
+            sample_max_len = max([header_len] + [len(v) for v in vals.tolist()] + [0])
+
+    very_long_keywords = [
+        "AI분석", "분석_내역", "감소원인", "주요반품원인", "가로폭이력",
+        "품목표시", "품목명(공식)", "비고", "AI반품분석"
+    ]
+    short_keywords = [
+        "순위", "CV", "월", "구분", "점수", "비율", "수량", "M2",
+        "단가", "금액", "매출", "날짜", "최근일자", "최근날짜", "거래처수",
+        "품목수", "출고횟수", "개월수"
+    ]
+
+    if any(k in col for k in very_long_keywords):
+        return "large"
+
+    if sample_max_len >= 28:
+        return "large"
+    if sample_max_len >= 14:
+        return "medium"
+
+    if any(k in col for k in short_keywords):
+        return "small"
+
+    return "small"
+
+
 def clean_and_safe_display(
     df,
     height=None,
@@ -347,31 +392,12 @@ def clean_and_safe_display(
         "진행현황", "최근진행현황"
     }
 
-    compact_small_cols = {
-        "순위", "AI_평가점수", "AI_우선순위점수", "감소규모점수", "추세하락점수",
-        "품목감소점수", "품목하락점수", "품목수", "전반부_품목수", "후반부_품목수",
-        "출고횟수", "거래처수", "총출고횟수", "개월수"
-    }
-    compact_medium_cols = {
-        "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "총판매량", "총매출액",
-        "전체_매출액", "전반부_평균매출", "후반부_평균매출", "평균증감액", "실제감소액",
-        "최근단가", "최근월매출", "하락률(%)", "변화율(%)", "반품율(%)", "반품금액",
-        "총매출", "총판매량", "월평균_매출", "월평균_출고량", "총량_M2"
-    }
-
     for col in display_df.columns:
         pinned = col in pinned_cols
+        is_text_col = (col in text_cols or col in fixed_text_like_cols)
+        width_value = _estimate_display_width(display_df, col, is_text=is_text_col)
 
-        if col in text_cols or col in fixed_text_like_cols:
-            width_value = "medium"
-            if col in ["거래처", "품목코드", "점착제코드", "점착제명", "최근날짜", "최근일자", "진행현황"]:
-                width_value = "small"
-            if col in [
-                "품목명(공식)", "품목표시", "가로폭이력", "분석_내역",
-                "AI분석", "원인추정", "감소원인", "비고", "주요반품원인", "AI반품분석"
-            ]:
-                width_value = "large"
-
+        if is_text_col:
             column_config[col] = st.column_config.TextColumn(
                 col,
                 width=width_value,
@@ -380,24 +406,18 @@ def clean_and_safe_display(
             continue
 
         if pd.api.types.is_numeric_dtype(display_df[col]):
-            num_width = "medium"
-            if col in compact_small_cols:
-                num_width = "small"
-            elif col in compact_medium_cols:
-                num_width = "medium"
-
             if any(k in col for k in ["하락률", "증감률", "비율", "변화율", "CV", "반품율"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=width_value)
             elif any(k in col for k in ["M2", "수량", "판매량", "총량", "출고량"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=width_value)
             elif any(k in col for k in ["점수", "AI", "우선순위", "통계", "종합"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=width_value)
             elif any(k in col for k in ["단가", "금액", "매출", "총매출", "평균", "원"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned, width=num_width)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned, width=width_value)
             else:
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned, width=num_width)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned, width=width_value)
         else:
-            column_config[col] = st.column_config.TextColumn(col, width="medium", pinned=pinned)
+            column_config[col] = st.column_config.TextColumn(col, width=width_value, pinned=pinned)
 
     final_height = height if height is not None else calc_table_height(display_df)
 
@@ -1689,7 +1709,6 @@ def build_customer_sales_analysis(q):
         ((item_summary["최근월매출"] - item_summary["기준월매출"]) / item_summary["기준월매출"]) * 100.0
     )
 
-    # 거래처 분석 강화
     analysis_rows = []
     if len(all_months) >= 2 and not customer_monthly.empty:
         mid_idx = len(all_months) // 2
@@ -1800,7 +1819,6 @@ def build_customer_sales_analysis(q):
         customer_summary["분석_내역"] = "분석 기간 부족 또는 거래 데이터 부족"
         customer_summary["AI분석"] = "분석 기간 부족"
 
-    # 품목별 전반부/후반부 평균 추가 (tab5 전용)
     item_analysis_rows = []
     if len(all_months) >= 2 and not customer_item_monthly.empty:
         mid_idx = len(all_months) // 2
