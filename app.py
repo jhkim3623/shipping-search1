@@ -347,36 +347,55 @@ def clean_and_safe_display(
         "진행현황", "최근진행현황"
     }
 
+    compact_small_cols = {
+        "순위", "AI_평가점수", "AI_우선순위점수", "감소규모점수", "추세하락점수",
+        "품목감소점수", "품목하락점수", "품목수", "전반부_품목수", "후반부_품목수",
+        "출고횟수", "거래처수", "총출고횟수", "개월수"
+    }
+    compact_medium_cols = {
+        "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "총판매량", "총매출액",
+        "전체_매출액", "전반부_평균매출", "후반부_평균매출", "평균증감액", "실제감소액",
+        "최근단가", "최근월매출", "하락률(%)", "변화율(%)", "반품율(%)", "반품금액",
+        "총매출", "총판매량", "월평균_매출", "월평균_출고량", "총량_M2"
+    }
+
     for col in display_df.columns:
         pinned = col in pinned_cols
 
         if col in text_cols or col in fixed_text_like_cols:
+            width_value = "medium"
+            if col in ["거래처", "품목코드", "점착제코드", "점착제명", "최근날짜", "최근일자", "진행현황"]:
+                width_value = "small"
+            if col in [
+                "품목명(공식)", "품목표시", "가로폭이력", "분석_내역",
+                "AI분석", "원인추정", "감소원인", "비고", "주요반품원인", "AI반품분석"
+            ]:
+                width_value = "large"
+
             column_config[col] = st.column_config.TextColumn(
                 col,
-                width="large" if col in [
-                    "품목명(공식)", "품목표시", "가로폭이력", "분석_내역",
-                    "AI분석", "원인추정", "감소원인", "비고", "주요반품원인", "AI반품분석"
-                ] else "medium",
+                width=width_value,
                 pinned=pinned,
             )
             continue
 
         if pd.api.types.is_numeric_dtype(display_df[col]):
-            # 퍼센트/비율 계열
+            num_width = "medium"
+            if col in compact_small_cols:
+                num_width = "small"
+            elif col in compact_medium_cols:
+                num_width = "medium"
+
             if any(k in col for k in ["하락률", "증감률", "비율", "변화율", "CV", "반품율"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
-            # 수량/M2 계열
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
             elif any(k in col for k in ["M2", "수량", "판매량", "총량", "출고량"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
-            # 점수 계열
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
             elif any(k in col for k in ["점수", "AI", "우선순위", "통계", "종합"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned)
-            # 금액/단가/매출/평균 계열
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
             elif any(k in col for k in ["단가", "금액", "매출", "총매출", "평균", "원"]):
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned)
-            # 그 외 숫자형도 기본 콤마 표시
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned, width=num_width)
             else:
-                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned)
+                column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned, width=num_width)
         else:
             column_config[col] = st.column_config.TextColumn(col, width="medium", pinned=pinned)
 
@@ -1670,7 +1689,7 @@ def build_customer_sales_analysis(q):
         ((item_summary["최근월매출"] - item_summary["기준월매출"]) / item_summary["기준월매출"]) * 100.0
     )
 
-    # ── 거래처 분석 강화: tab4 스타일의 분석 자료 생성 ──
+    # 거래처 분석 강화
     analysis_rows = []
     if len(all_months) >= 2 and not customer_monthly.empty:
         mid_idx = len(all_months) // 2
@@ -1780,6 +1799,43 @@ def build_customer_sales_analysis(q):
         customer_summary["진행현황"] = "안정"
         customer_summary["분석_내역"] = "분석 기간 부족 또는 거래 데이터 부족"
         customer_summary["AI분석"] = "분석 기간 부족"
+
+    # 품목별 전반부/후반부 평균 추가 (tab5 전용)
+    item_analysis_rows = []
+    if len(all_months) >= 2 and not customer_item_monthly.empty:
+        mid_idx = len(all_months) // 2
+        first_half = all_months[:mid_idx] if mid_idx > 0 else [all_months[0]]
+        last_half = all_months[mid_idx:] if mid_idx < len(all_months) else [all_months[-1]]
+
+        grouped = customer_item_monthly.groupby(["거래처", "품목표시"], dropna=False)
+        for (cust_name, item_name), g in grouped:
+            g = g.sort_values("월").copy()
+            first_vals = g[g["월"].isin(first_half)]["매출액"]
+            last_vals = g[g["월"].isin(last_half)]["매출액"]
+
+            first_avg = float(first_vals.mean()) if len(first_vals) > 0 else 0.0
+            last_avg = float(last_vals.mean()) if len(last_vals) > 0 else 0.0
+            delta_avg = last_avg - first_avg
+
+            item_analysis_rows.append({
+                "거래처": str(cust_name),
+                "품목표시": str(item_name),
+                "전반부_평균매출": int(round(first_avg, 0)),
+                "후반부_평균매출": int(round(last_avg, 0)),
+                "평균증감액": int(round(delta_avg, 0)),
+            })
+
+    item_analysis_df = pd.DataFrame(item_analysis_rows)
+    if not item_analysis_df.empty:
+        item_summary = item_summary.merge(
+            item_analysis_df,
+            on=["거래처", "품목표시"],
+            how="left"
+        )
+    else:
+        item_summary["전반부_평균매출"] = 0
+        item_summary["후반부_평균매출"] = 0
+        item_summary["평균증감액"] = 0
 
     item_summary = item_summary.sort_values(["거래처", "총매출액", "품목표시"], ascending=[True, False, True]).reset_index(drop=True)
 
@@ -2501,8 +2557,9 @@ with tab5:
                 if not item_detail.empty:
                     show_cols = [
                         c for c in [
-                            "품목표시", "총매출액", "총판매량", "최근단가",
-                            "기준월매출", "최근월매출", "변화율(%)", "가로폭이력", "최근일자"
+                            "품목표시", "총매출액", "총판매량",
+                            "전반부_평균매출", "후반부_평균매출", "평균증감액",
+                            "최근단가", "최근월매출", "변화율(%)", "가로폭이력", "최근일자"
                         ] if c in item_detail.columns
                     ]
                     show_df = item_detail[show_cols].sort_values(["총매출액", "품목표시"], ascending=[False, True]).reset_index(drop=True)
@@ -2527,7 +2584,7 @@ with tab5:
                     top70 = top70.head(5).copy()
 
                     if not top70.empty:
-                        st.markdown("#### 매출 70% 해당 품목 월별 매출 추이 (TOP5)")
+                        st.markdown("#### 매출 상위 품목 월별 추이")
                         top_items = top70["품목표시"].astype(str).tolist()
 
                         top_month = customer_item_monthly[
@@ -2556,7 +2613,7 @@ with tab5:
                                 height=430
                             )
                             fig_top.update_layout(
-                                title="매출 70% 해당 품목 월별 매출 추이 (TOP5)",
+                                title="매출 상위 품목 월별 추이",
                                 hovermode="x unified"
                             )
                             st.plotly_chart(fig_top, use_container_width=True)
