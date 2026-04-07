@@ -294,6 +294,7 @@ def clean_and_safe_display(
     pinned_cols=None,
     text_cols=None,
     disabled_cols=None,
+    column_width_overrides=None,
 ):
     if df is None:
         df = pd.DataFrame()
@@ -304,6 +305,28 @@ def clean_and_safe_display(
     pinned_cols = [str(c) for c in (pinned_cols or [])]
     text_cols = set(str(c) for c in (text_cols or []))
     disabled_cols = disabled_cols if disabled_cols is not None else False
+    column_width_overrides = column_width_overrides or {}
+
+    def _normalize_width(val):
+        if val is None:
+            return None
+        if isinstance(val, str):
+            low = val.strip().lower()
+            if low in ["small", "medium", "large"]:
+                return low
+            try:
+                return int(float(low))
+            except Exception:
+                return None
+        if isinstance(val, (int, float, np.integer, np.floating)):
+            return int(val)
+        return None
+
+    normalized_widths = {
+        str(k): _normalize_width(v)
+        for k, v in column_width_overrides.items()
+        if _normalize_width(v) is not None
+    }
 
     if display_df.empty:
         empty_height = calc_table_height(display_df)
@@ -361,6 +384,7 @@ def clean_and_safe_display(
 
     for col in display_df.columns:
         pinned = col in pinned_cols
+        manual_width = normalized_widths.get(col)
 
         if col in text_cols or col in fixed_text_like_cols:
             width_value = "medium"
@@ -371,6 +395,9 @@ def clean_and_safe_display(
                 "AI분석", "원인추정", "감소원인", "비고", "주요반품원인", "AI반품분석"
             ]:
                 width_value = "large"
+
+            if manual_width is not None:
+                width_value = manual_width
 
             column_config[col] = st.column_config.TextColumn(
                 col,
@@ -386,6 +413,9 @@ def clean_and_safe_display(
             elif col in compact_medium_cols:
                 num_width = "medium"
 
+            if manual_width is not None:
+                num_width = manual_width
+
             if any(k in col for k in ["하락률", "증감률", "비율", "변화율", "CV", "반품율"]):
                 column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
             elif any(k in col for k in ["M2", "수량", "판매량", "총량", "출고량"]):
@@ -397,7 +427,8 @@ def clean_and_safe_display(
             else:
                 column_config[col] = st.column_config.NumberColumn(col, format="%,.0f", pinned=pinned, width=num_width)
         else:
-            column_config[col] = st.column_config.TextColumn(col, width="medium", pinned=pinned)
+            width_value = manual_width if manual_width is not None else "medium"
+            column_config[col] = st.column_config.TextColumn(col, width=width_value, pinned=pinned)
 
     final_height = height if height is not None else calc_table_height(display_df)
 
@@ -435,7 +466,14 @@ def clean_and_safe_display(
     return None
 
 
-def render_banded_table(df, title=None, height=None, pinned_cols=None, text_cols=None):
+def render_banded_table(
+    df,
+    title=None,
+    height=None,
+    pinned_cols=None,
+    text_cols=None,
+    column_width_overrides=None,
+):
     if title:
         st.markdown(title)
 
@@ -445,6 +483,7 @@ def render_banded_table(df, title=None, height=None, pinned_cols=None, text_cols
             height=height,
             pinned_cols=pinned_cols,
             text_cols=text_cols,
+            column_width_overrides=column_width_overrides,
         )
         return
 
@@ -457,6 +496,7 @@ def render_banded_table(df, title=None, height=None, pinned_cols=None, text_cols
             height=height,
             pinned_cols=pinned_cols,
             text_cols=text_cols,
+            column_width_overrides=column_width_overrides,
         )
         return
 
@@ -1977,41 +2017,26 @@ with tab1:
 
         tab1_df = g[ordered_cols].sort_values(sc) if sc else g[ordered_cols]
 
-        tab1_width_config = {}
-        for col in tab1_df.columns:
-            if col == "거래처":
-                tab1_width_config[col] = st.column_config.TextColumn(col, width=170, pinned=True)
-            elif col == "품목코드":
-                tab1_width_config[col] = st.column_config.TextColumn(col, width=135, pinned=True)
-            elif col == "점착제코드":
-                tab1_width_config[col] = st.column_config.TextColumn(col, width=95)
-            elif col == "점착제명":
-                tab1_width_config[col] = st.column_config.TextColumn(col, width=120)
-            elif col == "가로폭이력":
-                tab1_width_config[col] = st.column_config.TextColumn(col, width=260)
-            elif col == "최근날짜":
-                tab1_width_config[col] = st.column_config.TextColumn(col, width=95)
-            elif col == "최근단가":
-                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=70)
-            elif col == "출고횟수":
-                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=70)
-            elif col == "월평균_출고량":
-                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.1f", width=95)
-            elif col == "월평균_매출":
-                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=95)
-            elif col == "총량_M2":
-                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.1f", width=80)
-            elif col == "매출액":
-                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=105)
-            elif col == "가중평균단가":
-                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=95)
-
-        st.dataframe(
+        clean_and_safe_display(
             tab1_df,
-            column_config=tab1_width_config,
-            use_container_width=True,
+            pinned_cols=["거래처", "품목코드"],
+            text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜"],
             height=calc_table_height(tab1_df),
-            hide_index=True,
+            column_width_overrides={
+                "거래처": 170,
+                "품목코드": 135,
+                "점착제코드": 95,
+                "점착제명": 120,
+                "가로폭이력": 260,
+                "최근날짜": 95,
+                "최근단가": 70,
+                "출고횟수": 70,
+                "월평균_출고량": 95,
+                "월평균_매출": 95,
+                "총량_M2": 80,
+                "매출액": 105,
+                "가중평균단가": 95,
+            },
         )
 
 with tab2:
@@ -2058,6 +2083,18 @@ with tab2:
             pinned_cols=["품목코드", "거래처"],
             text_cols=["품목코드", "거래처", "최근날짜"],
             height=None,
+            column_width_overrides={
+                "품목코드": 145,
+                "거래처": 145,
+                "최근날짜": 95,
+                "최근단가": 75,
+                "출고횟수": 70,
+                "월평균_출고량": 100,
+                "월평균_매출": 105,
+                "총량_M2": 90,
+                "매출액": 110,
+                "가중평균단가": 100,
+            },
         )
 
 with tab3:
@@ -2088,6 +2125,18 @@ with tab3:
             pinned_cols=["품목코드"],
             text_cols=["품목코드", "점착제코드"],
             height=None,
+            column_width_overrides={
+                "품목코드": 95,
+                "점착제코드": 75,
+                "최저단가": 85,
+                "최고단가": 85,
+                "거래처수": 70,
+                "총출고횟수": 80,
+                "월평균_출고량": 95,
+                "월평균_매출": 95,
+                "총량_M2": 85,
+                "총매출액": 95,
+            },
         )
 
         st.markdown("### 2) 업체 성향 AI 분석 기반 대표 레퍼런스")
@@ -2103,6 +2152,20 @@ with tab3:
             pinned_cols=["품목코드", "거래처"],
             text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세"],
             height=None,
+            column_width_overrides={
+                "품목코드": 90,
+                "거래처": 110,
+                "업체성향": 130,
+                "AI분석": 360,
+                "최근단가": 80,
+                "최저단가": 80,
+                "최고단가": 80,
+                "최근날짜": 95,
+                "월평균_출고량": 95,
+                "월평균_매출": 95,
+                "최근추세": 85,
+                "총매출액": 100,
+            },
         )
 
         st.markdown("### 3) 대표 업체 레퍼런스 확장")
@@ -2113,11 +2176,25 @@ with tab3:
         ]
         special_cols = [c for c in special_cols if c in special_ref.columns]
 
-        render_banded_table(
+        clean_and_safe_display(
             special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols),
             pinned_cols=["대표구분", "품목코드", "거래처"],
             text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근추세", "AI분석"],
             height=None,
+            column_width_overrides={
+                "대표구분": 150,
+                "품목코드": 95,
+                "거래처": 110,
+                "업체성향": 130,
+                "최근단가": 80,
+                "최저단가": 80,
+                "최고단가": 80,
+                "월평균_출고량": 95,
+                "월평균_매출": 95,
+                "최근추세": 85,
+                "총매출액": 100,
+                "AI분석": 360,
+            },
         )
 
         st.markdown("### 4) 대표 업체 최근단가 비교")
@@ -2170,6 +2247,20 @@ with tab4:
                 pinned_cols=["순위", "거래처"],
                 text_cols=["거래처", "분석_내역"],
                 disabled_cols=display_cols,
+                column_width_overrides={
+                    "순위": 55,
+                    "거래처": 110,
+                    "AI_우선순위점수": 95,
+                    "감소규모점수": 95,
+                    "추세하락점수": 95,
+                    "품목감소점수": 95,
+                    "전체_매출액": 110,
+                    "전반부_평균매출": 120,
+                    "후반부_평균매출": 120,
+                    "실제감소액": 100,
+                    "하락률(%)": 85,
+                    "분석_내역": 360,
+                },
             )
 
             if edited_priority is not None:
@@ -2262,7 +2353,18 @@ with tab4:
                     clean_and_safe_display(
                         contribution_df[detail_cols] if not contribution_df.empty else pd.DataFrame(columns=detail_cols),
                         pinned_cols=["품목코드"],
-                        text_cols=["품목코드"]
+                        text_cols=["품목코드"],
+                        column_width_overrides={
+                            "품목코드": 110,
+                            "전반부_평균": 95,
+                            "후반부_평균": 95,
+                            "감소액": 90,
+                            "변화액": 90,
+                            "변화율(%)": 85,
+                            "총매출": 95,
+                            "성장매출": 95,
+                            "CV": 70,
+                        }
                     )
 
                     st.markdown("---")
@@ -2522,7 +2624,26 @@ with tab5:
                     ascending=[False, False, True]
                 ),
                 pinned_cols=["거래처"],
-                text_cols=["거래처", "진행현황", "최근일자", "분석_내역", "AI분석"]
+                text_cols=["거래처", "진행현황", "최근일자", "분석_내역", "AI분석"],
+                column_width_overrides={
+                    "거래처": 110,
+                    "AI_평가점수": 85,
+                    "진행현황": 85,
+                    "전체_매출액": 110,
+                    "전반부_평균매출": 120,
+                    "후반부_평균매출": 120,
+                    "평균증감액": 100,
+                    "실제감소액": 100,
+                    "하락률(%)": 85,
+                    "전반부_품목수": 85,
+                    "후반부_품목수": 85,
+                    "품목감소확산도": 95,
+                    "총판매량": 95,
+                    "품목수": 70,
+                    "최근일자": 95,
+                    "분석_내역": 330,
+                    "AI분석": 360,
+                }
             )
 
             customer_options = customer_summary["거래처"].dropna().astype(str).tolist()
@@ -2600,7 +2721,20 @@ with tab5:
                     clean_and_safe_display(
                         show_df,
                         pinned_cols=["품목표시"],
-                        text_cols=["품목표시", "가로폭이력", "최근일자"]
+                        text_cols=["품목표시", "가로폭이력", "최근일자"],
+                        column_width_overrides={
+                            "품목표시": 180,
+                            "총매출액": 95,
+                            "총판매량": 95,
+                            "전반부_평균매출": 120,
+                            "후반부_평균매출": 120,
+                            "평균증감액": 100,
+                            "최근단가": 85,
+                            "최근월매출": 95,
+                            "변화율(%)": 85,
+                            "가로폭이력": 220,
+                            "최근일자": 95,
+                        }
                     )
 
                     total_sales = pd.to_numeric(show_df["총매출액"], errors="coerce").fillna(0).sum()
@@ -2714,7 +2848,20 @@ with tab5:
                             clean_and_safe_display(
                                 raw_df[raw_cols],
                                 pinned_cols=["날짜", "거래처", "품목코드"],
-                                text_cols=["날짜", "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "비고"]
+                                text_cols=["날짜", "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "비고"],
+                                column_width_overrides={
+                                    "날짜": 95,
+                                    "거래처": 120,
+                                    "품목코드": 110,
+                                    "품목명(공식)": 180,
+                                    "품목표시": 180,
+                                    "점착제코드": 95,
+                                    "가로폭(mm)": 90,
+                                    "수량(M2)": 90,
+                                    "단가(원/M2)": 95,
+                                    "금액(원)": 95,
+                                    "비고": 220,
+                                }
                             )
                 else:
                     st.info("해당 업체의 품목별 분석 데이터가 없습니다.")
@@ -2759,6 +2906,21 @@ with tab6:
                 pinned_cols=["순위", "품목코드"],
                 text_cols=["품목코드", "주요반품원인", "AI분석"],
                 height=None,
+                column_width_overrides={
+                    "순위": 55,
+                    "품목코드": 110,
+                    "품목하락점수": 95,
+                    "전체매출액": 105,
+                    "전반부_평균매출": 120,
+                    "후반부_평균매출": 120,
+                    "감소금액": 95,
+                    "하락률(%)": 85,
+                    "감소고객사수": 90,
+                    "반품금액": 95,
+                    "반품율(%)": 85,
+                    "주요반품원인": 220,
+                    "AI분석": 360,
+                },
             )
 
             st.markdown("---")
@@ -2991,6 +3153,19 @@ with tab6:
                         pinned_cols=["순위", "거래처"],
                         text_cols=["거래처", "주요반품원인", "AI반품분석", "감소원인"],
                         height=None,
+                        column_width_overrides={
+                            "순위": 55,
+                            "거래처": 110,
+                            "전반부_평균매출": 120,
+                            "후반부_평균매출": 120,
+                            "감소금액": 95,
+                            "하락률(%)": 85,
+                            "반품금액": 95,
+                            "반품율(%)": 85,
+                            "주요반품원인": 220,
+                            "AI반품분석": 320,
+                            "감소원인": 320,
+                        },
                     )
 
                     st.markdown("#### 품목 반품 원인 요약")
@@ -3010,6 +3185,12 @@ with tab6:
                             item_return_sorted[["거래처", "반품금액", "반품수량", "주요반품원인"]],
                             text_cols=["거래처", "주요반품원인"],
                             height=None,
+                            column_width_overrides={
+                                "거래처": 120,
+                                "반품금액": 95,
+                                "반품수량": 95,
+                                "주요반품원인": 280,
+                            },
                         )
                 else:
                     st.info("업체별 감소현황 데이터가 없습니다.")
@@ -3021,4 +3202,22 @@ with tab7:
         q[raw_cols],
         pinned_cols=["거래처", "품목코드"],
         text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜", "월", "비고", "담당부서", "영업담당부서", "담당자"],
+        column_width_overrides={
+            "날짜": 95,
+            "거래처": 120,
+            "품목코드": 110,
+            "점착제코드": 95,
+            "점착제명": 120,
+            "가로폭(mm)": 90,
+            "가로폭이력": 220,
+            "수량(M2)": 90,
+            "단가(원/M2)": 95,
+            "금액(원)": 95,
+            "최근날짜": 95,
+            "최근단가": 85,
+            "비고": 220,
+            "담당부서": 110,
+            "영업담당부서": 120,
+            "담당자": 95,
+        },
     )
