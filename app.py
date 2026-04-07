@@ -2024,7 +2024,7 @@ with tab1:
             height=calc_table_height(tab1_df),
             column_width_overrides={
                 "거래처": 170,
-                "품목코드": 135,
+                "품목코드": 145,
                 "점착제코드": 95,
                 "점착제명": 120,
                 "가로폭이력": 260,
@@ -2126,7 +2126,7 @@ with tab3:
             text_cols=["품목코드", "점착제코드"],
             height=None,
             column_width_overrides={
-                "품목코드": 95,
+                "품목코드": 145,
                 "점착제코드": 75,
                 "최저단가": 85,
                 "최고단가": 85,
@@ -2153,7 +2153,7 @@ with tab3:
             text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세"],
             height=None,
             column_width_overrides={
-                "품목코드": 90,
+                "품목코드": 145,
                 "거래처": 110,
                 "업체성향": 130,
                 "AI분석": 360,
@@ -2183,7 +2183,7 @@ with tab3:
             height=None,
             column_width_overrides={
                 "대표구분": 150,
-                "품목코드": 95,
+                "품목코드": 145,
                 "거래처": 110,
                 "업체성향": 130,
                 "최근단가": 80,
@@ -2249,7 +2249,7 @@ with tab4:
                 disabled_cols=display_cols,
                 column_width_overrides={
                     "순위": 55,
-                    "거래처": 110,
+                    "거래처": 120,
                     "AI_우선순위점수": 95,
                     "감소규모점수": 95,
                     "추세하락점수": 95,
@@ -2355,7 +2355,7 @@ with tab4:
                         pinned_cols=["품목코드"],
                         text_cols=["품목코드"],
                         column_width_overrides={
-                            "품목코드": 110,
+                            "품목코드": 145,
                             "전반부_평균": 95,
                             "후반부_평균": 95,
                             "감소액": 90,
