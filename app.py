@@ -1689,7 +1689,6 @@ def build_customer_sales_analysis(q):
         ((item_summary["최근월매출"] - item_summary["기준월매출"]) / item_summary["기준월매출"]) * 100.0
     )
 
-    # 거래처 분석 강화
     analysis_rows = []
     if len(all_months) >= 2 and not customer_monthly.empty:
         mid_idx = len(all_months) // 2
@@ -1800,7 +1799,6 @@ def build_customer_sales_analysis(q):
         customer_summary["분석_내역"] = "분석 기간 부족 또는 거래 데이터 부족"
         customer_summary["AI분석"] = "분석 기간 부족"
 
-    # 품목별 전반부/후반부 평균 추가 (tab5 전용)
     item_analysis_rows = []
     if len(all_months) >= 2 and not customer_item_monthly.empty:
         mid_idx = len(all_months) // 2
@@ -1977,11 +1975,43 @@ with tab1:
         ordered_cols = [c for c in ordered_cols if c in g.columns]
         sc = [c for c in ["거래처", "품목코드"] if c in g.columns]
 
-        clean_and_safe_display(
-            g[ordered_cols].sort_values(sc) if sc else g[ordered_cols],
-            pinned_cols=["거래처", "품목코드"],
-            text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜"],
-            height=None,
+        tab1_df = g[ordered_cols].sort_values(sc) if sc else g[ordered_cols]
+
+        tab1_width_config = {}
+        for col in tab1_df.columns:
+            if col == "거래처":
+                tab1_width_config[col] = st.column_config.TextColumn(col, width=170, pinned=True)
+            elif col == "품목코드":
+                tab1_width_config[col] = st.column_config.TextColumn(col, width=135, pinned=True)
+            elif col == "점착제코드":
+                tab1_width_config[col] = st.column_config.TextColumn(col, width=95)
+            elif col == "점착제명":
+                tab1_width_config[col] = st.column_config.TextColumn(col, width=120)
+            elif col == "가로폭이력":
+                tab1_width_config[col] = st.column_config.TextColumn(col, width=260)
+            elif col == "최근날짜":
+                tab1_width_config[col] = st.column_config.TextColumn(col, width=95)
+            elif col == "최근단가":
+                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=70)
+            elif col == "출고횟수":
+                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=70)
+            elif col == "월평균_출고량":
+                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.1f", width=95)
+            elif col == "월평균_매출":
+                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=95)
+            elif col == "총량_M2":
+                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.1f", width=80)
+            elif col == "매출액":
+                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=105)
+            elif col == "가중평균단가":
+                tab1_width_config[col] = st.column_config.NumberColumn(col, format="%,.0f", width=95)
+
+        st.dataframe(
+            tab1_df,
+            column_config=tab1_width_config,
+            use_container_width=True,
+            height=calc_table_height(tab1_df),
+            hide_index=True,
         )
 
 with tab2:
