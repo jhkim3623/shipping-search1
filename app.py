@@ -2249,7 +2249,7 @@ with tab4:
                 disabled_cols=display_cols,
                 column_width_overrides={
                     "순위": 55,
-                    "거래처": 120,
+                    "거래처": 145,
                     "AI_우선순위점수": 95,
                     "감소규모점수": 95,
                     "추세하락점수": 95,
