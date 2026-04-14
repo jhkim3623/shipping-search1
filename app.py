@@ -2816,29 +2816,63 @@ with tab5:
                         st.markdown("#### 선택 품목 월별 매출 그래프")
                         if not selected_item_month.empty:
                             month_axis_single = build_month_axis_frame(all_months if all_months else selected_item_month["월"].tolist())
-                            single_series = align_monthly_series(month_axis_single, selected_item_month[["월", "매출액"]], "매출액")
+                            single_sales = align_monthly_series(month_axis_single, selected_item_month[["월", "매출액"]], "매출액")
+                            single_qty = align_monthly_series(month_axis_single, selected_item_month[["월", "판매량"]], "판매량")
 
                             fig_single = go.Figure()
+
+                            fig_single.add_trace(go.Bar(
+                                x=single_qty["날짜축"],
+                                y=single_qty["판매량"],
+                                name="월출고 수량(M2)",
+                                marker_color="rgba(54, 162, 235, 0.58)",
+                                text=[f"{v:,.1f}" if pd.notna(v) and v != 0 else "" for v in single_qty["판매량"]],
+                                textposition="outside",
+                                yaxis="y2",
+                                hovertemplate="월: %{x|%Y-%m}<br>출고량: %{y:,.1f} M2<extra></extra>",
+                            ))
+
                             fig_single.add_trace(go.Scatter(
-                                x=single_series["날짜축"],
-                                y=single_series["매출액"],
+                                x=single_sales["날짜축"],
+                                y=single_sales["매출액"],
                                 mode="lines+markers+text",
                                 name=selected_product,
-                                line=dict(color="#1f77b4", width=3),
+                                line=dict(color="#e74c3c", width=3),
                                 marker=dict(size=8),
-                                text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in single_series["매출액"]],
+                                text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in single_sales["매출액"]],
                                 textposition="top center",
                                 textfont=dict(size=9),
                                 cliponaxis=False,
                                 hovertemplate="월: %{x|%Y-%m}<br>매출: %{y:,.0f}원<extra></extra>",
                             ))
-                            fig_single = apply_mobile_friendly_line_layout(
-                                fig_single,
-                                single_series["날짜축"],
-                                y_title="매출액(원)",
-                                height=400
+
+                            fig_single.update_layout(
+                                title=f"{selected_product} 월별 매출 / 출고량 추이",
+                                height=430,
+                                hovermode="x unified",
+                                margin=dict(l=20, r=55, t=40, b=90),
+                                yaxis=dict(
+                                    title="매출액(원)",
+                                    tickformat=",",
+                                    automargin=True
+                                ),
+                                yaxis2=dict(
+                                    title="출고량(M2)",
+                                    overlaying="y",
+                                    side="right",
+                                    tickformat=",.1f",
+                                    automargin=True,
+                                    showgrid=False
+                                ),
+                                legend=dict(
+                                    orientation="h",
+                                    yanchor="bottom",
+                                    y=1.02,
+                                    xanchor="right",
+                                    x=1
+                                ),
                             )
-                            fig_single.update_layout(title=f"{selected_product} 월별 매출 추이")
+                            fig_single = add_year_month_axis(fig_single, month_axis_single["날짜축"])
                             st.plotly_chart(fig_single, use_container_width=True)
                         else:
                             st.info("선택 품목의 월별 매출 그래프를 생성할 데이터가 없습니다.")
