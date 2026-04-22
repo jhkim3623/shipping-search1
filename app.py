@@ -367,7 +367,7 @@ def clean_and_safe_display(
         "최근날짜", "가로폭이력", "분석_내역", "AI분석", "업체성향", "최근추세",
         "월", "구분", "월표기", "연도", "대표구분", "반품원인", "주요반품원인",
         "원인추정", "감소원인", "비고", "AI반품분석", "담당부서", "영업담당부서", "담당자",
-        "진행현황", "최근진행현황"
+        "진행현황", "최근진행현황", "분석대상"
     }
 
     compact_small_cols = {
@@ -388,7 +388,7 @@ def clean_and_safe_display(
 
         if col in text_cols or col in fixed_text_like_cols:
             width_value = "medium"
-            if col in ["거래처", "품목코드", "점착제코드", "점착제명", "최근날짜", "최근일자", "진행현황"]:
+            if col in ["거래처", "품목코드", "점착제코드", "점착제명", "최근날짜", "최근일자", "진행현황", "분석대상"]:
                 width_value = "small"
             if col in [
                 "품목명(공식)", "품목표시", "가로폭이력", "분석_내역",
@@ -1887,6 +1887,286 @@ def build_customer_sales_analysis(q):
     }
 
 
+# ══════════════════════════════════════════════════════════
+# 신규: 거래처 통합 분석용 함수
+# 기존 탭 영향 없이 별도 생성
+# ══════════════════════════════════════════════════════════
+@st.cache_data(show_spinner=False)
+def build_customer_integrated_analysis(q, selected_customers_tuple):
+    if q is None or q.empty:
+        return {
+            "integrated_summary": pd.DataFrame(),
+            "integrated_monthly": pd.DataFrame(),
+            "integrated_item_summary": pd.DataFrame(),
+            "integrated_item_monthly": pd.DataFrame(),
+            "raw_df": pd.DataFrame(),
+            "all_months": [],
+            "group_name": "선택거래처합계",
+            "selected_customers": [],
+        }
+
+    selected_customers = [str(x).strip() for x in (selected_customers_tuple or []) if str(x).strip() != ""]
+
+    df = q.copy()
+    df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
+    df["월"] = df["날짜"].dt.strftime("%Y-%m")
+    df = df[df["월"].notna() & (df["월"] != "")].copy()
+    df = safe_make_product_label(df)
+
+    if "거래처" in df.columns:
+        df["거래처"] = df["거래처"].astype(str).str.strip()
+
+    if selected_customers:
+        df = df[df["거래처"].isin(selected_customers)].copy()
+
+    if df.empty:
+        return {
+            "integrated_summary": pd.DataFrame(),
+            "integrated_monthly": pd.DataFrame(),
+            "integrated_item_summary": pd.DataFrame(),
+            "integrated_item_monthly": pd.DataFrame(),
+            "raw_df": pd.DataFrame(),
+            "all_months": [],
+            "group_name": "선택거래처합계",
+            "selected_customers": selected_customers,
+        }
+
+    for c in ["금액(원)", "수량(M2)", "단가(원/M2)", "가로폭(mm)"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        else:
+            df[c] = 0
+
+    all_months = sorted(df["월"].dropna().astype(str).unique().tolist())
+    group_name = "선택거래처합계" if len(selected_customers) >= 2 else (selected_customers[0] if len(selected_customers) == 1 else "전체거래처합계")
+
+    summary_total_sales = float(df["금액(원)"].sum())
+    summary_total_qty = float(df["수량(M2)"].sum())
+    summary_item_count = int(df["품목표시"].nunique()) if "품목표시" in df.columns else 0
+    summary_recent_date = pd.to_datetime(df["날짜"], errors="coerce").max()
+
+    integrated_monthly = (
+        df.groupby("월", as_index=False)
+        .agg(매출액=("금액(원)", "sum"))
+        .sort_values("월")
+        .reset_index(drop=True)
+    )
+    integrated_monthly["날짜축"] = pd.to_datetime(integrated_monthly["월"] + "-01", errors="coerce")
+
+    integrated_item_monthly = (
+        df.groupby(["품목표시", "월"], as_index=False)
+        .agg(
+            매출액=("금액(원)", "sum"),
+            판매량=("수량(M2)", "sum"),
+        )
+        .sort_values(["품목표시", "월"])
+        .reset_index(drop=True)
+    )
+    integrated_item_monthly["날짜축"] = pd.to_datetime(integrated_item_monthly["월"] + "-01", errors="coerce")
+
+    integrated_item_summary = (
+        df.groupby("품목표시", as_index=False)
+        .agg(
+            총매출액=("금액(원)", "sum"),
+            총판매량=("수량(M2)", "sum"),
+            평균단가=("단가(원/M2)", "mean"),
+            최근가로폭=("가로폭(mm)", lambda s: s.dropna().iloc[-1] if len(s.dropna()) > 0 else np.nan),
+            최근일자=("날짜", "max"),
+        )
+    )
+
+    if not integrated_item_monthly.empty:
+        base_map = (
+            integrated_item_monthly.sort_values(["품목표시", "월"])
+            .groupby(["품목표시"], as_index=False)
+            .first()[["품목표시", "매출액"]]
+            .rename(columns={"매출액": "기준월매출"})
+        )
+        last_map = (
+            integrated_item_monthly.sort_values(["품목표시", "월"])
+            .groupby(["품목표시"], as_index=False)
+            .last()[["품목표시", "매출액"]]
+            .rename(columns={"매출액": "최근월매출"})
+        )
+        integrated_item_summary = integrated_item_summary.merge(base_map, on=["품목표시"], how="left")
+        integrated_item_summary = integrated_item_summary.merge(last_map, on=["품목표시"], how="left")
+    else:
+        integrated_item_summary["기준월매출"] = 0
+        integrated_item_summary["최근월매출"] = 0
+
+    recent_price = (
+        df.sort_values("날짜")
+        .groupby(["품목표시"], as_index=False)
+        .tail(1)[["품목표시", "단가(원/M2)"]]
+        .rename(columns={"단가(원/M2)": "최근단가"})
+    )
+    integrated_item_summary = integrated_item_summary.merge(recent_price, on=["품목표시"], how="left")
+
+    width_hist = (
+        df.groupby(["품목표시"], as_index=False)["가로폭(mm)"]
+        .apply(lambda s: ", ".join([
+            str(int(v)) if pd.notna(v) and float(v).is_integer() else str(v)
+            for v in pd.Series(s).dropna().unique()
+        ]))
+        .reset_index()
+        .rename(columns={"가로폭(mm)": "가로폭이력"})
+    )
+    integrated_item_summary = integrated_item_summary.merge(width_hist, on=["품목표시"], how="left")
+
+    integrated_item_summary["기준월매출"] = pd.to_numeric(integrated_item_summary["기준월매출"], errors="coerce").fillna(0)
+    integrated_item_summary["최근월매출"] = pd.to_numeric(integrated_item_summary["최근월매출"], errors="coerce").fillna(0)
+    integrated_item_summary["변화율(%)"] = np.where(
+        integrated_item_summary["기준월매출"] == 0,
+        np.nan,
+        ((integrated_item_summary["최근월매출"] - integrated_item_summary["기준월매출"]) / integrated_item_summary["기준월매출"]) * 100.0
+    )
+
+    if len(all_months) >= 2 and not integrated_monthly.empty:
+        mid_idx = len(all_months) // 2
+        first_half = all_months[:mid_idx] if mid_idx > 0 else [all_months[0]]
+        last_half = all_months[mid_idx:] if mid_idx < len(all_months) else [all_months[-1]]
+
+        first_data = integrated_monthly[integrated_monthly["월"].isin(first_half)]["매출액"]
+        last_data = integrated_monthly[integrated_monthly["월"].isin(last_half)]["매출액"]
+
+        avg_first = float(first_data.mean()) if len(first_data) > 0 else 0.0
+        avg_last = float(last_data.mean()) if len(last_data) > 0 else 0.0
+        delta = avg_last - avg_first
+        decline_amount = avg_first - avg_last
+        decline_rate = (decline_amount / avg_first) * 100.0 if avg_first > 0 else 0.0
+
+        monthly_vals = integrated_monthly["매출액"].astype(float).tolist()
+        slope = calc_slope(monthly_vals)
+        cv = calc_cv(monthly_vals)
+
+        recent_months = all_months[-3:] if len(all_months) >= 3 else all_months
+        recent_data = integrated_monthly[integrated_monthly["월"].isin(recent_months)].sort_values("월")
+        if len(recent_data) >= 2:
+            recent_trend = recent_data["매출액"].pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+            recent_neg_ratio = float((recent_trend < 0).mean()) if len(recent_trend) > 0 else 0.0
+            recent_avg_change = float(recent_trend.mean()) if len(recent_trend) > 0 else 0.0
+        else:
+            recent_neg_ratio = 0.0
+            recent_avg_change = 0.0
+
+        first_products = df[df["월"].isin(first_half)]["품목표시"].nunique() if "품목표시" in df.columns else 0
+        last_products = df[df["월"].isin(last_half)]["품목표시"].nunique() if "품목표시" in df.columns else 0
+        product_decline = max(0, first_products - last_products)
+        product_decline_ratio = (product_decline / max(1, first_products)) if first_products > 0 else 0.0
+
+        integrated_summary = pd.DataFrame([{
+            "분석대상": group_name,
+            "선택거래처수": len(selected_customers) if len(selected_customers) > 0 else df["거래처"].nunique(),
+            "전체_매출액": int(round(summary_total_sales, 0)),
+            "총판매량": float(summary_total_qty),
+            "품목수": int(summary_item_count),
+            "최근일자": summary_recent_date,
+            "전반부_평균매출": int(round(avg_first, 0)),
+            "후반부_평균매출": int(round(avg_last, 0)),
+            "평균증감액": int(round(delta, 0)),
+            "실제감소액": int(round(max(0.0, decline_amount), 0)),
+            "하락률(%)": round(decline_rate, 1),
+            "기울기": slope,
+            "CV": cv,
+            "최근음수비중": recent_neg_ratio,
+            "최근평균증감": recent_avg_change,
+            "전반부_품목수": int(first_products),
+            "후반부_품목수": int(last_products),
+            "품목감소확산도": round(product_decline_ratio, 3),
+        }])
+
+        integrated_summary["AI_평가점수"] = 50.0
+        integrated_summary["진행현황"] = integrated_summary.apply(infer_customer_sales_status, axis=1)
+        integrated_summary["분석_내역"] = integrated_summary.apply(infer_customer_sales_analysis, axis=1)
+        integrated_summary["AI분석"] = integrated_summary.apply(
+            lambda r: (
+                f"분석대상 {r.get('분석대상', group_name)} | "
+                f"진행현황 {r.get('진행현황', '안정')} | "
+                f"매출규모 {int(r.get('전체_매출액', 0)):,}원 | "
+                f"전반 {int(r.get('전반부_평균매출', 0)):,}원 → 후반 {int(r.get('후반부_평균매출', 0)):,}원 | "
+                f"{'감소 압력 존재' if float(r.get('기울기', 0)) < 0 else '상승/회복 흐름'}"
+            ),
+            axis=1
+        )
+    else:
+        integrated_summary = pd.DataFrame([{
+            "분석대상": group_name,
+            "선택거래처수": len(selected_customers) if len(selected_customers) > 0 else df["거래처"].nunique(),
+            "전체_매출액": int(round(summary_total_sales, 0)),
+            "총판매량": float(summary_total_qty),
+            "품목수": int(summary_item_count),
+            "최근일자": summary_recent_date,
+            "전반부_평균매출": 0,
+            "후반부_평균매출": 0,
+            "평균증감액": 0,
+            "실제감소액": 0,
+            "하락률(%)": 0.0,
+            "기울기": 0.0,
+            "CV": 0.0,
+            "최근음수비중": 0.0,
+            "최근평균증감": 0.0,
+            "전반부_품목수": 0,
+            "후반부_품목수": 0,
+            "품목감소확산도": 0.0,
+            "AI_평가점수": 50.0,
+            "진행현황": "안정",
+            "분석_내역": "분석 기간 부족 또는 거래 데이터 부족",
+            "AI분석": "분석 기간 부족",
+        }])
+
+    item_analysis_rows = []
+    if len(all_months) >= 2 and not integrated_item_monthly.empty:
+        mid_idx = len(all_months) // 2
+        first_half = all_months[:mid_idx] if mid_idx > 0 else [all_months[0]]
+        last_half = all_months[mid_idx:] if mid_idx < len(all_months) else [all_months[-1]]
+
+        grouped = integrated_item_monthly.groupby(["품목표시"], dropna=False)
+        for item_name, g in grouped:
+            if isinstance(item_name, tuple):
+                item_name = item_name[0]
+            g = g.sort_values("월").copy()
+            first_vals = g[g["월"].isin(first_half)]["매출액"]
+            last_vals = g[g["월"].isin(last_half)]["매출액"]
+
+            first_avg = float(first_vals.mean()) if len(first_vals) > 0 else 0.0
+            last_avg = float(last_vals.mean()) if len(last_vals) > 0 else 0.0
+            delta_avg = last_avg - first_avg
+
+            item_analysis_rows.append({
+                "품목표시": str(item_name),
+                "전반부_평균매출": int(round(first_avg, 0)),
+                "후반부_평균매출": int(round(last_avg, 0)),
+                "평균증감액": int(round(delta_avg, 0)),
+            })
+
+    item_analysis_df = pd.DataFrame(item_analysis_rows)
+    if not item_analysis_df.empty:
+        integrated_item_summary = integrated_item_summary.merge(
+            item_analysis_df,
+            on=["품목표시"],
+            how="left"
+        )
+    else:
+        integrated_item_summary["전반부_평균매출"] = 0
+        integrated_item_summary["후반부_평균매출"] = 0
+        integrated_item_summary["평균증감액"] = 0
+
+    integrated_item_summary = integrated_item_summary.sort_values(
+        ["총매출액", "품목표시"], ascending=[False, True]
+    ).reset_index(drop=True)
+
+    return {
+        "integrated_summary": integrated_summary,
+        "integrated_monthly": integrated_monthly,
+        "integrated_item_summary": integrated_item_summary,
+        "integrated_item_monthly": integrated_item_monthly,
+        "raw_df": df.copy(),
+        "all_months": all_months,
+        "group_name": group_name,
+        "selected_customers": selected_customers,
+    }
+
+
 DEFAULT_FILE = "data.xlsx"
 
 st.markdown('<div class="app-main-title">출고 이력 검색(거래처/품목/가로폭/점착제)</div>', unsafe_allow_html=True)
@@ -1966,12 +2246,13 @@ if sel_adh and "점착제코드" in q.columns:
 if sdate and edate and "날짜" in q.columns:
     q = q[(q["날짜"] >= pd.to_datetime(sdate)) & (q["날짜"] <= pd.to_datetime(edate))]
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab5b, tab6, tab7 = st.tabs([
     "거래처별 검색",
     "품목별 검색",
     "🏷️ 견적 레퍼런스",
     "📉 매출 하락 분석",
     "📊 거래처별 매출 분석",
+    "📊 거래처통합분석",
     "매출 감소 품목 분석",
     "원자료",
 ])
@@ -2903,6 +3184,315 @@ with tab5:
                             )
                 else:
                     st.info("해당 업체의 품목별 분석 데이터가 없습니다.")
+
+with tab5b:
+    st.subheader("📊 거래처통합분석")
+    st.caption("TAB5와 동일한 형식의 별도 통합 분석 탭입니다. 여러 거래처 선택 시 선택된 거래처의 합산 데이터를 상세분석으로 표시합니다.")
+
+    if q.empty:
+        st.warning("조건에 맞는 데이터가 없습니다.")
+    else:
+        integrated_pack = build_customer_integrated_analysis(q, tuple(sel_cust))
+        integrated_summary = integrated_pack["integrated_summary"]
+        integrated_monthly = integrated_pack["integrated_monthly"]
+        integrated_item_summary = integrated_pack["integrated_item_summary"]
+        integrated_item_monthly = integrated_pack["integrated_item_monthly"]
+        integrated_raw_df = integrated_pack["raw_df"]
+        all_months = integrated_pack["all_months"]
+        group_name = integrated_pack["group_name"]
+        selected_customers_used = integrated_pack["selected_customers"]
+
+        if integrated_summary.empty:
+            st.info("통합 분석 데이터가 없습니다.")
+        else:
+            if selected_customers_used and len(selected_customers_used) >= 2:
+                st.info(f"선택 거래처 {len(selected_customers_used)}개 합산 분석: {', '.join(selected_customers_used[:10])}" + (" ..." if len(selected_customers_used) > 10 else ""))
+            elif selected_customers_used and len(selected_customers_used) == 1:
+                st.info(f"선택 거래처 단일 분석: {selected_customers_used[0]}")
+            else:
+                st.info("거래처 필터 미선택 상태이므로 현재 조건의 전체 거래처 합산 기준으로 분석합니다.")
+
+            st.markdown("### 1) 매출분석 자료")
+            show_summary = integrated_summary.copy()
+            if "최근일자" in show_summary.columns:
+                show_summary["최근일자"] = pd.to_datetime(show_summary["최근일자"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+            summary_cols = [
+                "분석대상", "선택거래처수", "AI_평가점수", "진행현황", "전체_매출액",
+                "전반부_평균매출", "후반부_평균매출", "평균증감액",
+                "실제감소액", "하락률(%)", "전반부_품목수", "후반부_품목수",
+                "품목감소확산도", "총판매량", "품목수", "최근일자", "분석_내역", "AI분석"
+            ]
+            summary_cols = [c for c in summary_cols if c in show_summary.columns]
+
+            clean_and_safe_display(
+                show_summary[summary_cols],
+                pinned_cols=["분석대상"],
+                text_cols=["분석대상", "진행현황", "최근일자", "분석_내역", "AI분석"],
+                column_width_overrides={
+                    "분석대상": 170,
+                    "선택거래처수": 85,
+                    "AI_평가점수": 85,
+                    "진행현황": 85,
+                    "전체_매출액": 110,
+                    "전반부_평균매출": 120,
+                    "후반부_평균매출": 120,
+                    "평균증감액": 100,
+                    "실제감소액": 100,
+                    "하락률(%)": 85,
+                    "전반부_품목수": 85,
+                    "후반부_품목수": 85,
+                    "품목감소확산도": 95,
+                    "총판매량": 95,
+                    "품목수": 70,
+                    "최근일자": 95,
+                    "분석_내역": 330,
+                    "AI분석": 360,
+                }
+            )
+
+            st.markdown("### 2) 업체별 상세 분석")
+            st.markdown("#### 업체 전체 월별 매출 추이")
+
+            if not integrated_monthly.empty:
+                month_axis = build_month_axis_frame(all_months if all_months else integrated_monthly["월"].tolist())
+                series = align_monthly_series(month_axis, integrated_monthly[["월", "매출액"]], "매출액")
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=series["날짜축"],
+                    y=series["매출액"],
+                    mode="lines+markers+text",
+                    name="월매출",
+                    line=dict(color="#1f77b4", width=3),
+                    marker=dict(size=8),
+                    text=[sales_to_manwon_label(v) for v in series["매출액"]],
+                    textposition="top center",
+                    textfont=dict(size=10, color="#1f77b4"),
+                    hovertemplate="월: %{x|%Y-%m}<br>매출: %{y:,.0f}원<br>만원단위: %{text}<extra></extra>",
+                ))
+
+                if len(series) >= 2:
+                    x_num = np.arange(len(series))
+                    y_num = pd.to_numeric(series["매출액"], errors="coerce").fillna(0).values.astype(float)
+                    coef = np.polyfit(x_num, y_num, 1)
+                    trend = coef[0] * x_num + coef[1]
+                    fig.add_trace(go.Scatter(
+                        x=series["날짜축"],
+                        y=trend,
+                        mode="lines",
+                        name="추세선",
+                        line=dict(color="red", dash="dash", width=2),
+                        hoverinfo="skip",
+                    ))
+
+                fig = apply_mobile_friendly_line_layout(
+                    fig,
+                    series["날짜축"],
+                    y_title="매출액(원)",
+                    height=430
+                )
+                fig.update_layout(title=f"{group_name} 월별 매출 추이")
+                st.plotly_chart(fig, use_container_width=True, key=f"tab5b_total_{group_name}")
+            else:
+                st.info("월별 매출 데이터가 없습니다.")
+
+            st.markdown("#### 품목별 변화율 상세 (총매출순)")
+            item_detail = integrated_item_summary.copy()
+
+            if not item_detail.empty:
+                show_cols = [
+                    c for c in [
+                        "품목표시", "총매출액", "총판매량",
+                        "전반부_평균매출", "후반부_평균매출", "평균증감액",
+                        "최근단가", "최근월매출", "변화율(%)", "가로폭이력", "최근일자"
+                    ] if c in item_detail.columns
+                ]
+                show_df = item_detail[show_cols].sort_values(["총매출액", "품목표시"], ascending=[False, True]).reset_index(drop=True)
+
+                if "최근일자" in show_df.columns:
+                    show_df["최근일자"] = pd.to_datetime(show_df["최근일자"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+                clean_and_safe_display(
+                    show_df,
+                    pinned_cols=["품목표시"],
+                    text_cols=["품목표시", "가로폭이력", "최근일자"],
+                    column_width_overrides={
+                        "품목표시": 180,
+                        "총매출액": 95,
+                        "총판매량": 95,
+                        "전반부_평균매출": 120,
+                        "후반부_평균매출": 120,
+                        "평균증감액": 100,
+                        "최근단가": 85,
+                        "최근월매출": 95,
+                        "변화율(%)": 85,
+                        "가로폭이력": 220,
+                        "최근일자": 95,
+                    }
+                )
+
+                top7 = show_df.head(7).copy()
+
+                if not top7.empty:
+                    st.markdown("#### 매출 주도 상위 품목 월별 매출 추이 (Top 7)")
+                    top_items = top7["품목표시"].astype(str).tolist()
+
+                    top_month = integrated_item_monthly[
+                        integrated_item_monthly["품목표시"].astype(str).isin(top_items)
+                    ].copy()
+
+                    if not top_month.empty:
+                        month_axis = build_month_axis_frame(all_months)
+                        fig_top = go.Figure()
+
+                        for item_name in top_items:
+                            sub = top_month[top_month["품목표시"].astype(str) == str(item_name)].copy()
+                            aligned = align_monthly_series(month_axis, sub[["월", "매출액"]], "매출액")
+                            fig_top.add_trace(go.Scatter(
+                                x=aligned["날짜축"],
+                                y=aligned["매출액"],
+                                mode="lines+markers+text",
+                                name=item_name,
+                                text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in aligned["매출액"]],
+                                textposition="top center",
+                                textfont=dict(size=9),
+                                cliponaxis=False,
+                                hovertemplate=f"품목: {item_name}<br>월: %{{x|%Y-%m}}<br>매출: %{{y:,.0f}}원<extra></extra>"
+                            ))
+
+                        fig_top = apply_mobile_friendly_line_layout(
+                            fig_top,
+                            month_axis["날짜축"],
+                            y_title="매출액(원)",
+                            height=460
+                        )
+                        fig_top.update_layout(
+                            title="매출 주도 상위 품목 월별 매출 추이 (Top 7)",
+                            hovermode="x unified",
+                            legend=dict(
+                                orientation="h",
+                                yanchor="bottom",
+                                y=-0.32,
+                                x=0,
+                                xanchor="left"
+                            )
+                        )
+                        st.plotly_chart(fig_top, use_container_width=True, key=f"tab5b_top7_{group_name}")
+
+                product_options = show_df["품목표시"].dropna().astype(str).tolist()
+                if product_options:
+                    selected_product = st.selectbox(
+                        "원자료를 확인할 품목을 선택하세요",
+                        options=product_options,
+                        key="customer_integrated_item_raw_select_v1"
+                    )
+
+                    raw_cols = [c for c in [
+                        "날짜", "거래처", "품목코드", "품목명(공식)", "품목표시",
+                        "점착제코드", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "비고"
+                    ] if c in integrated_raw_df.columns]
+
+                    raw_df = integrated_raw_df.copy()
+                    raw_df = safe_make_product_label(raw_df)
+
+                    if "품목표시" in raw_df.columns:
+                        raw_df = raw_df[raw_df["품목표시"].astype(str).str.strip() == str(selected_product).strip()]
+
+                    selected_item_month = integrated_item_monthly[
+                        integrated_item_monthly["품목표시"].astype(str).str.strip() == str(selected_product).strip()
+                    ].copy()
+
+                    st.markdown("#### 선택 품목 월별 매출 그래프")
+                    if not selected_item_month.empty:
+                        month_axis_single = build_month_axis_frame(all_months if all_months else selected_item_month["월"].tolist())
+                        single_sales = align_monthly_series(month_axis_single, selected_item_month[["월", "매출액"]], "매출액")
+                        single_qty = align_monthly_series(month_axis_single, selected_item_month[["월", "판매량"]], "판매량")
+
+                        fig_single = go.Figure()
+
+                        fig_single.add_trace(go.Bar(
+                            x=single_qty["날짜축"],
+                            y=single_qty["판매량"],
+                            name="월출고 수량(M2)",
+                            marker_color="rgba(54, 162, 235, 0.58)",
+                            text=[f"{v:,.1f}" if pd.notna(v) and v != 0 else "" for v in single_qty["판매량"]],
+                            textposition="outside",
+                            yaxis="y2",
+                            hovertemplate="월: %{x|%Y-%m}<br>출고량: %{y:,.1f} M2<extra></extra>",
+                        ))
+
+                        fig_single.add_trace(go.Scatter(
+                            x=single_sales["날짜축"],
+                            y=single_sales["매출액"],
+                            mode="lines+markers+text",
+                            name=selected_product,
+                            line=dict(color="#e74c3c", width=3),
+                            marker=dict(size=8),
+                            text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in single_sales["매출액"]],
+                            textposition="top center",
+                            textfont=dict(size=9),
+                            cliponaxis=False,
+                            hovertemplate="월: %{x|%Y-%m}<br>매출: %{y:,.0f}원<extra></extra>",
+                        ))
+
+                        fig_single.update_layout(
+                            title=f"{selected_product} 월별 매출 / 출고량 추이",
+                            height=430,
+                            hovermode="x unified",
+                            margin=dict(l=20, r=55, t=40, b=90),
+                            yaxis=dict(
+                                title="매출액(원)",
+                                tickformat=",",
+                                automargin=True
+                            ),
+                            yaxis2=dict(
+                                title="출고량(M2)",
+                                overlaying="y",
+                                side="right",
+                                tickformat=",.1f",
+                                automargin=True,
+                                showgrid=False
+                            ),
+                            legend=dict(
+                                orientation="h",
+                                yanchor="bottom",
+                                y=1.02,
+                                xanchor="right",
+                                x=1
+                            ),
+                        )
+                        fig_single = add_year_month_axis(fig_single, month_axis_single["날짜축"])
+                        st.plotly_chart(fig_single, use_container_width=True, key=f"tab5b_single_{group_name}_{selected_product}")
+                    else:
+                        st.info("선택 품목의 월별 매출 그래프를 생성할 데이터가 없습니다.")
+
+                    st.markdown("#### 선택 품목 원자료")
+                    if raw_df.empty:
+                        st.info("선택한 품목의 원자료가 없습니다.")
+                    else:
+                        if "날짜" in raw_df.columns:
+                            raw_df = raw_df.sort_values("날짜", ascending=False)
+                        clean_and_safe_display(
+                            raw_df[raw_cols],
+                            pinned_cols=["날짜", "거래처", "품목코드"],
+                            text_cols=["날짜", "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "비고"],
+                            column_width_overrides={
+                                "날짜": 95,
+                                "거래처": 145,
+                                "품목코드": 145,
+                                "품목명(공식)": 180,
+                                "품목표시": 180,
+                                "점착제코드": 80,
+                                "가로폭(mm)": 80,
+                                "수량(M2)": 90,
+                                "단가(원/M2)": 85,
+                                "금액(원)": 95,
+                                "비고": 220,
+                            }
+                        )
+            else:
+                st.info("통합 품목별 분석 데이터가 없습니다.")
 
 with tab6:
     st.subheader("품목별 하락 원인 분석")
