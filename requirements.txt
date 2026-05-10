@@ -3,3 +3,5 @@ pandas>=2.1.0
 openpyxl>=3.1.0
 numpy>=1.24.0
 plotly>=5.18.0
+holidays>=0.48
+xlsxwriter>=3.2.0
