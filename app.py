@@ -4577,35 +4577,77 @@ with tab6b:
                         ].copy()
 
                         if not common_month_axis.empty:
-                            selected_customer_month_plot = align_monthly_series(
+                            selected_customer_sales = align_monthly_series(
                                 common_month_axis,
                                 selected_customer_month[["월", "매출액"]].copy() if not selected_customer_month.empty else pd.DataFrame(columns=["월", "매출액"]),
                                 "매출액"
                             )
+                            selected_customer_qty = align_monthly_series(
+                                common_month_axis,
+                                selected_customer_month[["월", "출고량"]].copy() if (not selected_customer_month.empty and "출고량" in selected_customer_month.columns) else pd.DataFrame(columns=["월", "출고량"]),
+                                "출고량"
+                            )
 
                             fig_item_customer = go.Figure()
+
+                            fig_item_customer.add_trace(go.Bar(
+                                x=selected_customer_qty["날짜축"],
+                                y=selected_customer_qty["출고량"],
+                                name="판매량(M2)",
+                                marker_color="rgba(54, 162, 235, 0.55)",
+                                text=[f"{v:,.1f}" if pd.notna(v) and v != 0 else "" for v in selected_customer_qty["출고량"]],
+                                textposition="outside",
+                                yaxis="y2",
+                                hovertemplate="월: %{x|%Y-%m}<br>판매량: %{y:,.1f} M2<extra></extra>",
+                            ))
+
                             fig_item_customer.add_trace(go.Scatter(
-                                x=selected_customer_month_plot["날짜축"],
-                                y=selected_customer_month_plot["매출액"],
+                                x=selected_customer_sales["날짜축"],
+                                y=selected_customer_sales["매출액"],
                                 mode="lines+markers+text",
-                                text=[sales_to_manwon_label(v) for v in selected_customer_month_plot["매출액"]],
+                                text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in selected_customer_sales["매출액"]],
                                 textposition="top center",
-                                name=selected_customer,
-                                line=dict(width=3, color="#1f77b4"),
+                                name="매출액",
+                                line=dict(width=3, color="#ff5a3c"),
                                 marker=dict(size=8),
                                 cliponaxis=False,
-                                hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
+                                hovertemplate="월: %{x|%Y-%m}<br>매출액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
                             ))
-                            fig_item_customer = apply_mobile_friendly_line_layout(
-                                fig_item_customer,
-                                common_month_axis["날짜축"],
-                                y_title="판매금액(원)",
-                                height=380
+
+                            fig_item_customer.update_layout(
+                                title=f"{selected_item} / {selected_customer} 월별 판매 추이",
+                                height=430,
+                                hovermode="x unified",
+                                margin=dict(l=20, r=60, t=40, b=90),
+                                yaxis=dict(
+                                    title="매출액(원)",
+                                    tickformat=",",
+                                    automargin=True
+                                ),
+                                yaxis2=dict(
+                                    title="판매량(M2)",
+                                    overlaying="y",
+                                    side="right",
+                                    tickformat=",.1f",
+                                    automargin=True,
+                                    showgrid=False
+                                ),
+                                legend=dict(
+                                    orientation="h",
+                                    yanchor="bottom",
+                                    y=1.02,
+                                    xanchor="right",
+                                    x=1
+                                ),
+                                uniformtext_minsize=8,
+                                uniformtext_mode="hide",
                             )
+
+                            fig_item_customer = add_year_month_axis(fig_item_customer, common_month_axis["날짜축"])
                             st.plotly_chart(
                                 fig_item_customer,
                                 use_container_width=True,
-                                key=f"growth_item_customer_monthly_chart_{selected_item}_{selected_customer}_v1"
+                                key=f"growth_item_customer_monthly_chart_{selected_item}_{selected_customer}_v2"
                             )
                         else:
                             st.info("선택한 업체의 해당 품목 판매금액 월별 데이터가 없습니다.")
@@ -4659,8 +4701,12 @@ with tab6b:
 
                     st.markdown("#### 선택 품목 원자료")
                     selected_item_raw = safe_make_product_label(q.copy())
+                    selected_item_raw["거래처"] = selected_item_raw["거래처"].astype(str).str.strip()
+                    selected_item_raw["품목표시"] = selected_item_raw["품목표시"].astype(str).str.strip()
+
                     selected_item_raw = selected_item_raw[
-                        selected_item_raw["품목표시"].astype(str) == str(selected_item)
+                        (selected_item_raw["품목표시"] == str(selected_item).strip()) &
+                        (selected_item_raw["거래처"] == str(selected_customer).strip())
                     ].copy()
 
                     if "날짜" in selected_item_raw.columns:
@@ -4672,7 +4718,7 @@ with tab6b:
                     ] if c in selected_item_raw.columns]
 
                     if selected_item_raw.empty:
-                        st.info("선택한 품목의 원자료가 없습니다.")
+                        st.info("선택한 품목 + 업체의 원자료가 없습니다.")
                     else:
                         clean_and_safe_display(
                             selected_item_raw[raw_cols],
