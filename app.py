@@ -1,18 +1,10 @@
 import os
-import calendar
 from io import BytesIO
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-
-try:
-    import holidays
-    HOLIDAYS_AVAILABLE = True
-except Exception:
-    holidays = None
-    HOLIDAYS_AVAILABLE = False
 
 st.set_page_config(page_title="출고 이력 검색", layout="wide")
 
@@ -25,13 +17,19 @@ st.markdown("""
     padding-right: 0.7rem;
     max-width: 100%;
 }
+
+/* 가로 row 정렬 */
 div[data-testid="stHorizontalBlock"] {
     gap: 0.6rem;
     align-items: flex-end !important;
 }
+
+/* column 내부 wrapper 높이 안정화 */
 div[data-testid="column"] > div {
     width: 100% !important;
 }
+
+/* 라벨 공통 */
 label[data-testid="stWidgetLabel"] {
     margin-bottom: 0.18rem !important;
     padding-bottom: 0 !important;
@@ -43,6 +41,8 @@ label[data-testid="stWidgetLabel"] p {
     color: #4b5563 !important;
     font-weight: 600 !important;
 }
+
+/* metric box */
 div[data-testid="stMetric"] {
     background: #fafafa;
     border: 1px solid #eeeeee;
@@ -55,6 +55,8 @@ div[data-testid="stMetric"] {
     justify-content: center;
     box-sizing: border-box;
 }
+
+/* metric 내부 */
 div[data-testid="stMetric"] > div {
     justify-content: center !important;
 }
@@ -69,6 +71,8 @@ div[data-testid="stMetricValue"] {
     line-height: 1.05 !important;
     color: #111827 !important;
 }
+
+/* select 공통 wrapper */
 div[data-baseweb="select"] {
     min-height: 56px !important;
 }
@@ -82,6 +86,8 @@ div[data-baseweb="select"] > div {
     padding-top: 0 !important;
     padding-bottom: 0 !important;
 }
+
+/* select 내부 값 세로 중앙 */
 div[data-baseweb="select"] div[class*="valueContainer"] {
     min-height: 56px !important;
     height: 56px !important;
@@ -109,6 +115,8 @@ div[data-baseweb="select"] input::placeholder {
     color: #6b7280 !important;
     opacity: 1 !important;
 }
+
+/* choose options 복구 */
 div[data-baseweb="select"] div[class*="placeholder"] {
     color: #6b7280 !important;
     opacity: 1 !important;
@@ -118,12 +126,16 @@ div[data-baseweb="select"] div[class*="placeholder"] {
     display: flex !important;
     align-items: center !important;
 }
+
+/* multiselect tag 정렬 */
 div[data-baseweb="tag"] {
     display: flex !important;
     align-items: center !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
 }
+
+/* 사이드바 필터 글씨 선명하게 */
 section[data-testid="stSidebar"] label[data-testid="stWidgetLabel"] p {
     color: #374151 !important;
     font-weight: 700 !important;
@@ -166,15 +178,20 @@ section[data-testid="stSidebar"] div[data-baseweb="select"] input::placeholder {
     color: #6b7280 !important;
     opacity: 1 !important;
 }
+
+/* 멀티셀렉트 내부 텍스트 잘림 방지 */
 section[data-testid="stSidebar"] div[data-baseweb="select"] * {
     overflow: visible !important;
 }
+
+/* dataframe */
 div[data-testid="stDataFrame"] {
     width: 100%;
 }
 [data-testid="column"] {
     width: 100% !important;
 }
+
 .app-main-title {
     display: block;
     font-size: 1.8rem;
@@ -189,6 +206,7 @@ div[data-testid="stDataFrame"] {
     font-weight: 700;
     margin-bottom: 0.2rem;
 }
+
 @media (max-width: 1024px) {
     .block-container {
         padding-left: 0.45rem;
@@ -228,6 +246,7 @@ div[data-testid="stDataFrame"] {
         min-height: 52px !important;
         height: 52px !important;
     }
+
     section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="singleValue"],
     section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="placeholder"],
     section[data-testid="stSidebar"] div[data-baseweb="select"] input {
@@ -265,6 +284,65 @@ def safe_make_product_label(df):
         temp["품목코드"]
     )
     return temp
+
+
+def dataframe_to_excel_bytes(sheets: dict) -> bytes:
+    output = BytesIO()
+
+    excel_engine = "openpyxl"
+    try:
+        import xlsxwriter  # noqa: F401
+        excel_engine = "xlsxwriter"
+    except Exception:
+        excel_engine = "openpyxl"
+
+    with pd.ExcelWriter(output, engine=excel_engine) as writer:
+        for sheet_name, df in sheets.items():
+            safe_name = str(sheet_name)[:31] if sheet_name else "Sheet1"
+            export_df = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+            export_df.to_excel(writer, index=False, sheet_name=safe_name)
+
+            if excel_engine == "xlsxwriter":
+                workbook = writer.book
+                worksheet = writer.sheets[safe_name]
+
+                header_fmt = workbook.add_format({
+                    "bold": True,
+                    "text_wrap": False,
+                    "valign": "vcenter",
+                    "align": "center",
+                    "fg_color": "#D9EAF7",
+                    "border": 1,
+                })
+                int_fmt = workbook.add_format({"num_format": "#,##0"})
+                float_fmt = workbook.add_format({"num_format": "#,##0.00"})
+
+                for col_num, col_name in enumerate(export_df.columns):
+                    worksheet.write(0, col_num, col_name, header_fmt)
+
+                    max_len = len(str(col_name)) + 2
+                    if not export_df.empty:
+                        try:
+                            sample_max = export_df.iloc[:, col_num].astype(str).map(len).max()
+                            if pd.notna(sample_max):
+                                max_len = max(max_len, int(sample_max) + 2)
+                        except Exception:
+                            pass
+
+                    max_len = min(max_len, 40)
+
+                    series = export_df.iloc[:, col_num]
+                    if pd.api.types.is_integer_dtype(series):
+                        worksheet.set_column(col_num, col_num, max_len, int_fmt)
+                    elif pd.api.types.is_float_dtype(series):
+                        worksheet.set_column(col_num, col_num, max_len, float_fmt)
+                    else:
+                        worksheet.set_column(col_num, col_num, max_len)
+
+                worksheet.freeze_panes(1, 0)
+
+    output.seek(0)
+    return output.getvalue()
 
 
 def clean_and_safe_display(
@@ -355,7 +433,7 @@ def clean_and_safe_display(
         "순위", "AI_평가점수", "AI_우선순위점수", "감소규모점수", "추세하락점수",
         "품목감소점수", "품목하락점수", "품목증가점수", "품목수", "전반부_품목수", "후반부_품목수",
         "출고횟수", "거래처수", "총출고횟수", "개월수", "선택거래처수", "최근월출고횟수", "최근월활성고객수",
-        "증가고객사수", "감소고객사수", "지속출고개월수", "총영업일수", "경과영업일수"
+        "증가고객사수", "감소고객사수", "지속출고개월수"
     }
     compact_medium_cols = {
         "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "총판매량", "총매출액",
@@ -399,7 +477,7 @@ def clean_and_safe_display(
             if manual_width is not None:
                 num_width = manual_width
 
-            if any(k in col for k in ["하락률", "증감률", "증가율", "비율", "변화율", "CV", "반품율", "진행률"]):
+            if any(k in col for k in ["하락률", "증감률", "증가율", "비율", "변화율", "CV", "반품율"]):
                 column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
             elif any(k in col for k in ["M2", "수량", "판매량", "총량", "출고량"]):
                 column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
@@ -447,6 +525,71 @@ def clean_and_safe_display(
         hide_index=True,
     )
     return None
+
+
+def render_banded_table(
+    df,
+    title=None,
+    height=None,
+    pinned_cols=None,
+    text_cols=None,
+    column_width_overrides=None,
+):
+    if title:
+        st.markdown(title)
+
+    if df is None or df.empty:
+        clean_and_safe_display(
+            pd.DataFrame(),
+            height=height,
+            pinned_cols=pinned_cols,
+            text_cols=text_cols,
+            column_width_overrides=column_width_overrides,
+        )
+        return
+
+    temp = df.copy().reset_index(drop=True)
+    temp.columns = [str(c) for c in temp.columns]
+
+    if "품목코드" not in temp.columns:
+        clean_and_safe_display(
+            temp,
+            height=height,
+            pinned_cols=pinned_cols,
+            text_cols=text_cols,
+            column_width_overrides=column_width_overrides,
+        )
+        return
+
+    item_order = temp["품목코드"].astype(str).fillna("").drop_duplicates().tolist()
+    shade_map = {
+        item: ("background-color: rgba(0,0,0,0.04);" if i % 2 == 1 else "")
+        for i, item in enumerate(item_order)
+    }
+
+    def _row_style(row):
+        key = str(row.get("품목코드", ""))
+        return [shade_map.get(key, "")] * len(row)
+
+    styled = temp.style.apply(_row_style, axis=1)
+
+    num_format = {}
+    for c in temp.columns:
+        if any(k in c for k in ["M2", "수량", "판매량", "총량", "출고량"]):
+            num_format[c] = "{:,.1f}"
+        elif any(k in c for k in ["단가", "금액", "매출", "총매출", "평균", "원"]):
+            num_format[c] = "{:,.0f}"
+        elif any(k in c for k in ["하락률", "증감률", "증가율", "비율", "변화율", "CV", "점수", "반품율"]):
+            num_format[c] = "{:,.1f}"
+        else:
+            if pd.api.types.is_numeric_dtype(temp[c]):
+                num_format[c] = "{:,.0f}"
+
+    if num_format:
+        styled = styled.format(num_format)
+
+    final_height = height if height is not None else calc_table_height(temp, max_rows=20)
+    st.dataframe(styled, use_container_width=True, height=final_height, hide_index=True)
 
 
 def sorted_unique(series):
@@ -584,6 +727,7 @@ def make_indexed_series(df, group_col, value_col, time_col):
         return pd.DataFrame(columns=empty_cols)
 
     temp = df.copy()
+
     temp[group_col] = temp[group_col].astype(str)
     temp[time_col] = pd.to_datetime(temp[time_col], errors="coerce")
     temp[value_col] = pd.to_numeric(temp[value_col], errors="coerce").fillna(0)
@@ -619,7 +763,8 @@ def make_indexed_series(df, group_col, value_col, time_col):
         if col not in result.columns:
             result[col] = np.nan
 
-    return result[empty_cols].copy()
+    result = result[empty_cols].copy()
+    return result
 
 
 def should_show_helper_chart(top_product_monthly):
@@ -853,193 +998,29 @@ def infer_customer_sales_analysis(row):
     return " | ".join(comments[:5])
 
 
-# ══════════════════════════════════════════════════════════
-# 영업일/엑셀/증가품목 분석 유틸
-# ══════════════════════════════════════════════════════════
-KR_HOLIDAYS = holidays.country_holidays("KR") if HOLIDAYS_AVAILABLE else set()
-
-
-def is_business_day(dt):
-    ts = pd.Timestamp(dt)
-    if ts.weekday() >= 5:
-        return False
-    if HOLIDAYS_AVAILABLE and ts.date() in KR_HOLIDAYS:
-        return False
-    return True
-
-
-def count_business_days_in_month(target_date):
-    if pd.isna(target_date):
-        return 0
-    ts = pd.Timestamp(target_date)
-    year = ts.year
-    month = ts.month
-    last_day = calendar.monthrange(year, month)[1]
-
-    cnt = 0
-    for day in range(1, last_day + 1):
-        dt = pd.Timestamp(year=year, month=month, day=day)
-        if is_business_day(dt):
-            cnt += 1
-    return cnt
-
-
-def count_business_days_elapsed_in_month(target_date):
-    if pd.isna(target_date):
-        return 0
-    ts = pd.Timestamp(target_date)
-    year = ts.year
-    month = ts.month
-    day_limit = ts.day
-
-    cnt = 0
-    for day in range(1, day_limit + 1):
-        dt = pd.Timestamp(year=year, month=month, day=day)
-        if is_business_day(dt):
-            cnt += 1
-    return cnt
-
-
 def get_month_progress_ratio_from_df(df, date_col="날짜"):
     if df is None or df.empty or date_col not in df.columns:
-        return 1.0, None, None, 0, 0
+        return 1.0, None, None
 
     temp = df.copy()
     temp[date_col] = pd.to_datetime(temp[date_col], errors="coerce")
     temp = temp.dropna(subset=[date_col])
     if temp.empty:
-        return 1.0, None, None, 0, 0
+        return 1.0, None, None
 
     latest_dt = temp[date_col].max()
     if pd.isna(latest_dt):
-        return 1.0, None, None, 0, 0
+        return 1.0, None, None
 
     month_start = pd.Timestamp(latest_dt.year, latest_dt.month, 1)
     month_end = month_start + pd.offsets.MonthEnd(1)
+    days_in_month = int(month_end.day)
+    passed_days = int(latest_dt.day)
 
-    total_bd = count_business_days_in_month(latest_dt)
-    elapsed_bd = count_business_days_elapsed_in_month(latest_dt)
-
-    if total_bd <= 0:
-        return 1.0, latest_dt, month_end, elapsed_bd, total_bd
-
-    ratio = elapsed_bd / total_bd
+    ratio = passed_days / days_in_month if days_in_month > 0 else 1.0
     ratio = max(min(ratio, 1.0), 0.01)
 
-    return ratio, latest_dt, month_end, elapsed_bd, total_bd
-
-
-def dataframe_to_excel_bytes(sheet_dfs):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        workbook = writer.book
-
-        fmt_header = workbook.add_format({
-            "bold": True,
-            "bg_color": "#D9EAF7",
-            "border": 1,
-            "align": "center",
-            "valign": "vcenter"
-        })
-        fmt_int = workbook.add_format({"num_format": "#,##0"})
-        fmt_float = workbook.add_format({"num_format": "#,##0.0"})
-        fmt_text = workbook.add_format({})
-
-        for sheet_name, df in sheet_dfs:
-            safe_name = str(sheet_name)[:31] if str(sheet_name).strip() else "Sheet1"
-            out = df.copy() if df is not None else pd.DataFrame()
-
-            for c in out.columns:
-                if pd.api.types.is_datetime64_any_dtype(out[c]):
-                    out[c] = pd.to_datetime(out[c], errors="coerce").dt.strftime("%Y-%m-%d")
-
-            out.to_excel(writer, sheet_name=safe_name, index=False)
-            ws = writer.sheets[safe_name]
-
-            for col_idx, col_name in enumerate(out.columns):
-                ws.write(0, col_idx, col_name, fmt_header)
-
-                col_series = out[col_name]
-                max_len = max(
-                    len(str(col_name)),
-                    int(col_series.astype(str).map(len).max()) if len(col_series) > 0 else len(str(col_name))
-                )
-                width = min(max_len + 2, 40)
-
-                if pd.api.types.is_numeric_dtype(col_series):
-                    if any(k in str(col_name) for k in ["율", "%", "비율", "기울기", "CV", "M2", "수량", "출고량", "점수"]):
-                        ws.set_column(col_idx, col_idx, width, fmt_float)
-                    else:
-                        ws.set_column(col_idx, col_idx, width, fmt_int)
-                else:
-                    ws.set_column(col_idx, col_idx, width, fmt_text)
-
-            ws.freeze_panes(1, 0)
-
-    output.seek(0)
-    return output.getvalue()
-
-
-def build_dual_axis_sales_qty_chart(month_axis_df, sales_df, qty_df, title, sales_name="매출액", qty_name="출고량"):
-    sales_series = align_monthly_series(month_axis_df, sales_df, sales_name)
-    qty_series = align_monthly_series(month_axis_df, qty_df, qty_name)
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        x=qty_series["날짜축"],
-        y=qty_series[qty_name],
-        name=qty_name,
-        yaxis="y2",
-        marker_color="rgba(54, 162, 235, 0.45)",
-        text=[f"{v:,.1f}" if pd.notna(v) and v != 0 else "" for v in qty_series[qty_name]],
-        textposition="outside",
-        cliponaxis=False,
-        hovertemplate="월: %{x|%Y-%m}<br>출고량: %{y:,.1f}<extra></extra>",
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=sales_series["날짜축"],
-        y=sales_series[sales_name],
-        mode="lines+markers+text",
-        name=sales_name,
-        line=dict(color="#d62728", width=3),
-        marker=dict(size=8),
-        text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in sales_series[sales_name]],
-        textposition="top center",
-        textfont=dict(size=9),
-        cliponaxis=False,
-        hovertemplate="월: %{x|%Y-%m}<br>매출: %{y:,.0f}원<extra></extra>",
-    ))
-
-    fig.update_layout(
-        title=title,
-        height=430,
-        hovermode="x unified",
-        margin=dict(l=20, r=60, t=40, b=90),
-        yaxis=dict(
-            title="매출액(원)",
-            tickformat=",",
-            automargin=True
-        ),
-        yaxis2=dict(
-            title="출고량(M2)",
-            overlaying="y",
-            side="right",
-            tickformat=",.1f",
-            automargin=True,
-            showgrid=False
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
-    )
-    fig = add_year_month_axis(fig, month_axis_df["날짜축"])
-    return fig
+    return ratio, latest_dt, month_end
 
 
 def calc_recent_month_increase_score(
@@ -1859,9 +1840,6 @@ def build_growth_item_analysis(q):
             "prev_month": None,
             "month_progress_ratio": 1.0,
             "latest_dt": None,
-            "month_end": None,
-            "elapsed_bd": 0,
-            "total_bd": 0,
         }
 
     mid_idx = len(all_months) // 2
@@ -1871,8 +1849,7 @@ def build_growth_item_analysis(q):
     recent_month = all_months[-1]
     prev_month = all_months[-2] if len(all_months) >= 2 else None
 
-    recent_month_df = df[df["월"] == recent_month].copy()
-    month_progress_ratio, latest_dt, month_end, elapsed_bd, total_bd = get_month_progress_ratio_from_df(recent_month_df, "날짜")
+    month_progress_ratio, latest_dt, month_end = get_month_progress_ratio_from_df(df, "날짜")
 
     item_monthly = (
         df.groupby(["품목코드", "품목표시", "월"], dropna=False)
@@ -2060,8 +2037,6 @@ def build_growth_item_analysis(q):
         "month_progress_ratio": month_progress_ratio,
         "latest_dt": latest_dt,
         "month_end": month_end,
-        "elapsed_bd": elapsed_bd,
-        "total_bd": total_bd,
     }
 
 
@@ -2614,9 +2589,6 @@ def build_customer_integrated_analysis(q, selected_customers_tuple):
 DEFAULT_FILE = "data.xlsx"
 
 st.markdown('<div class="app-main-title">출고 이력 검색(거래처/품목/가로폭/점착제)</div>', unsafe_allow_html=True)
-
-if not HOLIDAYS_AVAILABLE:
-    st.warning("`holidays` 패키지가 설치되지 않아 한국 공휴일은 제외하지 못하고, 주말 제외 영업일 기준으로 진행률을 계산합니다. requirements.txt 반영 후 재배포하면 공휴일까지 반영됩니다.")
 
 uploaded = st.file_uploader("📂 다른 파일 업로드 (미업로드 시 기본 데이터 자동 로드)", type=["xlsx"])
 
@@ -3999,14 +3971,15 @@ with tab6:
                 },
             )
 
-            decline_export_df = top_items[rank_cols].copy()
-            decline_csv = decline_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            decline_excel_bytes = dataframe_to_excel_bytes({
+                "품목우선순위": top_items[rank_cols].copy()
+            })
             st.download_button(
-                "📥 감소 품목 우선순위 CSV 다운로드",
-                data=decline_csv,
-                file_name="매출감소_품목우선순위.csv",
-                mime="text/csv",
-                key="download_decline_item_rank_csv"
+                "📥 감소 품목 우선순위 XLSX 다운로드",
+                data=decline_excel_bytes,
+                file_name="매출감소_품목우선순위.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_decline_item_rank_xlsx"
             )
 
             st.markdown("---")
@@ -4150,13 +4123,6 @@ with tab6:
                     st.markdown("#### 업체별 월판매 현황")
                     customer_options = cust_summary.sort_values("순위")["거래처"].dropna().astype(str).str.strip().tolist()
 
-                    item_return_sorted = item_return.copy()
-                    raw_df_decline = pd.DataFrame()
-                    raw_cols_decline = [c for c in [
-                        "날짜", "거래처", "품목코드", "품목명(공식)", "품목표시",
-                        "점착제코드", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "비고"
-                    ] if c in q.columns]
-
                     if len(customer_options) > 0:
                         left_col, m1, m2, m3 = st.columns([2.9, 1.2, 1.2, 1.2])
 
@@ -4189,7 +4155,7 @@ with tab6:
                             with m3:
                                 st.metric("반품금액", "-")
 
-                        st.markdown(f"#### {selected_item} / {selected_customer} 월별 판매 추이")
+                        st.markdown(f"#### {selected_item} 월별 판매 추이")
 
                         selected_customer_month = item_cust.copy()
                         selected_customer_month["거래처"] = selected_customer_month["거래처"].astype(str).str.strip()
@@ -4198,63 +4164,38 @@ with tab6:
                         ].copy()
 
                         if not common_month_axis.empty:
-                            sales_df = selected_customer_month[["월", "매출액"]].copy() if not selected_customer_month.empty else pd.DataFrame(columns=["월", "매출액"])
-                            qty_df = selected_customer_month[["월", "출고량"]].copy() if not selected_customer_month.empty else pd.DataFrame(columns=["월", "출고량"])
-
-                            fig_item_customer = build_dual_axis_sales_qty_chart(
+                            selected_customer_month_plot = align_monthly_series(
                                 common_month_axis,
-                                sales_df=sales_df,
-                                qty_df=qty_df,
-                                title=f"{selected_item} / {selected_customer} 월별 매출 · 출고량 추이",
-                                sales_name="매출액",
-                                qty_name="출고량"
+                                selected_customer_month[["월", "매출액"]].copy() if not selected_customer_month.empty else pd.DataFrame(columns=["월", "매출액"]),
+                                "매출액"
+                            )
+
+                            fig_item_customer = go.Figure()
+                            fig_item_customer.add_trace(go.Scatter(
+                                x=selected_customer_month_plot["날짜축"],
+                                y=selected_customer_month_plot["매출액"],
+                                mode="lines+markers+text",
+                                text=[sales_to_manwon_label(v) for v in selected_customer_month_plot["매출액"]],
+                                textposition="top center",
+                                name=selected_customer,
+                                line=dict(width=3, color="#1f77b4"),
+                                marker=dict(size=8),
+                                cliponaxis=False,
+                                hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
+                            ))
+                            fig_item_customer = apply_mobile_friendly_line_layout(
+                                fig_item_customer,
+                                common_month_axis["날짜축"],
+                                y_title="판매금액(원)",
+                                height=380
                             )
                             st.plotly_chart(
                                 fig_item_customer,
                                 use_container_width=True,
-                                key=f"item_customer_monthly_chart_{selected_item}_{selected_customer}_v6"
+                                key=f"item_customer_monthly_chart_{selected_item}_{selected_customer}_v5"
                             )
                         else:
                             st.info("선택한 업체의 해당 품목 판매금액 월별 데이터가 없습니다.")
-
-                        st.markdown("#### 선택 품목 원자료")
-
-                        raw_df_decline = q.copy()
-                        raw_df_decline = safe_make_product_label(raw_df_decline)
-
-                        if "거래처" in raw_df_decline.columns:
-                            raw_df_decline = raw_df_decline[
-                                raw_df_decline["거래처"].astype(str).str.strip() == str(selected_customer).strip()
-                            ]
-                        if "품목표시" in raw_df_decline.columns:
-                            raw_df_decline = raw_df_decline[
-                                raw_df_decline["품목표시"].astype(str).str.strip() == str(selected_item).strip()
-                            ]
-
-                        if raw_df_decline.empty:
-                            st.info("선택한 업체/품목의 원자료가 없습니다.")
-                        else:
-                            if "날짜" in raw_df_decline.columns:
-                                raw_df_decline = raw_df_decline.sort_values("날짜", ascending=False)
-
-                            clean_and_safe_display(
-                                raw_df_decline[raw_cols_decline],
-                                pinned_cols=["날짜", "거래처", "품목코드"],
-                                text_cols=["날짜", "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "비고"],
-                                column_width_overrides={
-                                    "날짜": 95,
-                                    "거래처": 145,
-                                    "품목코드": 145,
-                                    "품목명(공식)": 180,
-                                    "품목표시": 180,
-                                    "점착제코드": 80,
-                                    "가로폭(mm)": 80,
-                                    "수량(M2)": 90,
-                                    "단가(원/M2)": 85,
-                                    "금액(원)": 95,
-                                    "비고": 220,
-                                }
-                            )
                     else:
                         st.info("선택 가능한 업체가 없습니다.")
 
@@ -4286,20 +4227,25 @@ with tab6:
                         },
                     )
 
-                    cust_export_df = cust_summary[customer_display_cols].copy()
-                    cust_csv = cust_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                    st.download_button(
-                        "📥 선택 품목 업체 감소현황 CSV 다운로드",
-                        data=cust_csv,
-                        file_name=f"매출감소_업체현황_{selected_item}.csv",
-                        mime="text/csv",
-                        key="download_decline_customer_csv"
+                    selected_item_raw = safe_make_product_label(q.copy())
+                    selected_item_raw = selected_item_raw[selected_item_raw["품목표시"].astype(str) == str(selected_item)].copy()
+                    if "날짜" in selected_item_raw.columns:
+                        selected_item_raw = selected_item_raw.sort_values("날짜", ascending=False)
+
+                    st.markdown("#### 선택 품목 원자료")
+                    raw_cols = [c for c in [
+                        "날짜", "거래처", "품목코드", "품목명(공식)", "품목표시",
+                        "점착제코드", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "비고"
+                    ] if c in selected_item_raw.columns]
+                    clean_and_safe_display(
+                        selected_item_raw[raw_cols] if raw_cols else pd.DataFrame(),
+                        pinned_cols=["날짜", "거래처", "품목코드"],
+                        text_cols=["날짜", "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "비고"],
                     )
 
                     st.markdown("#### 품목 반품 원인 요약")
                     if item_return.empty:
                         st.info("해당 품목의 반품 데이터가 없습니다.")
-                        item_return_sorted = pd.DataFrame(columns=["거래처", "반품금액", "반품수량", "주요반품원인"])
                     else:
                         item_return_sorted = item_return.copy()
                         item_return_sorted["거래처"] = item_return_sorted["거래처"].astype(str).str.strip()
@@ -4322,39 +4268,27 @@ with tab6:
                             },
                         )
 
-                    decline_excel_sheets = [
-                        ("품목요약", item_row[[
-                            c for c in [
-                                "품목코드", "품목표시", "품목하락점수", "전체매출액",
-                                "전반부_평균매출", "후반부_평균매출", "감소금액",
-                                "하락률(%)", "감소고객사수", "반품금액", "반품율(%)",
-                                "주요반품원인", "AI분석"
-                            ] if c in item_row.columns
-                        ]]),
-                        ("업체감소현황", cust_summary[customer_display_cols]),
-                        ("품목원자료", raw_df_decline[raw_cols_decline] if not raw_df_decline.empty else pd.DataFrame(columns=raw_cols_decline)),
-                        ("품목월별", item_month[[
-                            c for c in ["월", "매출액", "출고량", "반품금액", "반품수량"] if c in item_month.columns
-                        ]]),
-                        ("반품원인", item_return_sorted[[
-                            c for c in ["거래처", "반품금액", "반품수량", "주요반품원인"] if c in item_return_sorted.columns
-                        ]]),
-                    ]
-
+                    decline_excel_sheets = {
+                        "품목요약": top_items[rank_cols].copy(),
+                        "업체감소현황": cust_summary[customer_display_cols].copy(),
+                        "품목원자료": selected_item_raw[raw_cols].copy() if raw_cols else pd.DataFrame(),
+                        "품목월별": item_month.copy(),
+                        "반품원인": item_return.copy(),
+                    }
                     decline_excel_bytes = dataframe_to_excel_bytes(decline_excel_sheets)
                     st.download_button(
-                        "📥 선택 품목 상세 엑셀 다운로드(.xlsx)",
+                        "📥 선택 품목 통합 XLSX 다운로드",
                         data=decline_excel_bytes,
-                        file_name=f"매출감소_상세_{selected_item}.xlsx",
+                        file_name=f"매출감소_통합_{selected_item}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="download_decline_item_excel"
+                        key="download_decline_customer_xlsx"
                     )
                 else:
                     st.info("업체별 감소현황 데이터가 없습니다.")
 
 with tab6b:
     st.subheader("📈 매출 증가 품목 분석")
-    st.caption("최근월 진행률을 영업일 기준으로 보정한 환산 매출 + 전반/후반 증가 + 출고패턴 + 최근 상승추세를 반영합니다.")
+    st.caption("최근월 진행률을 반영한 환산 매출 기준 + 전반/후반 증가 + 출고패턴 + 최근 상승추세를 반영합니다.")
 
     if q.empty or "날짜" not in q.columns or "금액(원)" not in q.columns or "품목코드" not in q.columns:
         st.warning("분석에 필요한 데이터가 부족합니다.")
@@ -4371,8 +4305,7 @@ with tab6b:
         prev_month = pack.get("prev_month")
         month_progress_ratio = pack.get("month_progress_ratio", 1.0)
         latest_dt = pack.get("latest_dt", None)
-        elapsed_bd = pack.get("elapsed_bd", 0)
-        total_bd = pack.get("total_bd", 0)
+        month_end = pack.get("month_end", None)
 
         if item_rank.empty:
             st.info("분석할 품목 데이터가 없습니다.")
@@ -4381,15 +4314,11 @@ with tab6b:
             top_items = item_rank.head(top_count).copy()
 
             progress_pct = month_progress_ratio * 100.0
-            if latest_dt is not None:
-                progress_desc = f"영업일 진행률 {elapsed_bd}/{total_bd}일 ≈ {progress_pct:.1f}%"
-                if HOLIDAYS_AVAILABLE:
-                    progress_desc += " (주말 + 한국 공휴일 제외)"
-                else:
-                    progress_desc += " (주말 제외 기준, 공휴일 패키지 미설치)"
+            if latest_dt is not None and month_end is not None:
                 st.info(
-                    f"최근월({recent_month})은 {latest_dt.strftime('%Y-%m-%d')} 기준 데이터이며, "
-                    f"{progress_desc}를 반영해 환산 매출을 계산했습니다."
+                    f"최근월({recent_month})은 {latest_dt.strftime('%Y-%m-%d')} 기준 데이터로, "
+                    f"월 진행률 약 {progress_pct:.1f}%를 반영해 환산 매출을 계산했습니다. "
+                    f"직전월({prev_month}) 대비 최근월 증가세를 우선 확인합니다."
                 )
 
             st.markdown("### 1) 증가 품목 우선순위 LIST (상위 30%)")
@@ -4430,14 +4359,15 @@ with tab6b:
                 },
             )
 
-            growth_export_df = top_items[rank_cols].copy()
-            growth_csv = growth_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            growth_excel_bytes = dataframe_to_excel_bytes({
+                "품목우선순위": top_items[rank_cols].copy()
+            })
             st.download_button(
-                "📥 증가 품목 우선순위 CSV 다운로드",
-                data=growth_csv,
-                file_name="매출증가_품목우선순위.csv",
-                mime="text/csv",
-                key="download_growth_item_rank_csv"
+                "📥 증가 품목 우선순위 XLSX 다운로드",
+                data=growth_excel_bytes,
+                file_name="매출증가_품목우선순위.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_growth_item_rank_xlsx"
             )
 
             st.markdown("---")
@@ -4479,41 +4409,50 @@ with tab6b:
 
                 st.markdown("#### 선택 품목 월별 추이")
                 if not item_month.empty and not common_month_axis.empty:
-                    item_month_plot = align_monthly_series(
-                        common_month_axis,
-                        item_month[["월", "매출액"]].copy(),
-                        "매출액"
-                    )
+                    item_sales = align_monthly_series(common_month_axis, item_month[["월", "매출액"]].copy(), "매출액")
+                    item_qty = align_monthly_series(common_month_axis, item_month[["월", "출고량"]].copy(), "출고량")
 
                     fig_item = go.Figure()
+                    fig_item.add_trace(go.Bar(
+                        x=item_qty["날짜축"],
+                        y=item_qty["출고량"],
+                        name="출고량(M2)",
+                        marker_color="rgba(54, 162, 235, 0.58)",
+                        text=[f"{v:,.1f}" if pd.notna(v) and v != 0 else "" for v in item_qty["출고량"]],
+                        textposition="outside",
+                        yaxis="y2",
+                        hovertemplate="월: %{x|%Y-%m}<br>출고량: %{y:,.1f} M2<extra></extra>",
+                    ))
                     fig_item.add_trace(go.Scatter(
-                        x=item_month_plot["날짜축"],
-                        y=item_month_plot["매출액"],
+                        x=item_sales["날짜축"],
+                        y=item_sales["매출액"],
                         mode="lines+markers+text",
-                        text=[sales_to_manwon_label(v) for v in item_month_plot["매출액"]],
+                        text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in item_sales["매출액"]],
                         textposition="top center",
                         name="월매출",
-                        line=dict(width=3, color="#1f77b4"),
+                        line=dict(width=3, color="#e74c3c"),
                         marker=dict(size=8),
                         cliponaxis=False,
                         hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
                     ))
-                    fig_item = apply_mobile_friendly_line_layout(
-                        fig_item,
-                        common_month_axis["날짜축"],
-                        y_title="판매금액(원)",
-                        height=380
+                    fig_item.update_layout(
+                        height=430,
+                        hovermode="x unified",
+                        margin=dict(l=20, r=55, t=40, b=90),
+                        yaxis=dict(title="매출액(원)", tickformat=",", automargin=True),
+                        yaxis2=dict(title="출고량(M2)", overlaying="y", side="right", tickformat=",.1f", automargin=True, showgrid=False),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     )
+                    fig_item = add_year_month_axis(fig_item, common_month_axis["날짜축"])
                     st.plotly_chart(
                         fig_item,
                         use_container_width=True,
-                        key=f"growth_item_monthly_chart_{selected_item}_v1"
+                        key=f"growth_item_monthly_chart_{selected_item}_v2"
                     )
                 else:
                     st.info("선택 품목의 월별 추이 데이터가 없습니다.")
 
                 st.markdown("#### 매출증가 상위 10개 업체 월별 매출 추이")
-                top10_month_export = pd.DataFrame()
                 if not growth_customer_summary.empty:
                     item_cust_growth = growth_customer_summary[
                         growth_customer_summary["품목표시"].astype(str) == str(selected_item)
@@ -4530,24 +4469,24 @@ with tab6b:
                             .tolist()
                         )
 
-                        top10_month_export = item_cust[
+                        top10_month = item_cust[
                             item_cust["거래처"].astype(str).isin(top10_customers)
                         ].copy()
 
-                        if not top10_month_export.empty:
+                        if not top10_month.empty:
                             month_axis = build_month_axis_frame(all_months)
                             fig_top10 = go.Figure()
 
                             for cust_name in top10_customers:
-                                sub = top10_month_export[top10_month_export["거래처"].astype(str) == str(cust_name)].copy()
-                                aligned = align_monthly_series(month_axis, sub[["월", "매출액"]], "매출액")
+                                sub = top10_month[top10_month["거래처"].astype(str) == str(cust_name)].copy()
+                                aligned_sales = align_monthly_series(month_axis, sub[["월", "매출액"]], "매출액")
 
                                 fig_top10.add_trace(go.Scatter(
-                                    x=aligned["날짜축"],
-                                    y=aligned["매출액"],
+                                    x=aligned_sales["날짜축"],
+                                    y=aligned_sales["매출액"],
                                     mode="lines+markers+text",
                                     name=str(cust_name),
-                                    text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in aligned["매출액"]],
+                                    text=[sales_to_manwon_label(v) if pd.notna(v) and v != 0 else "" for v in aligned_sales["매출액"]],
                                     textposition="top center",
                                     textfont=dict(size=9),
                                     cliponaxis=False,
@@ -4662,12 +4601,6 @@ with tab6b:
                     st.markdown("#### 업체별 월판매 현황")
                     customer_options = cust_summary.sort_values("순위")["거래처"].dropna().astype(str).str.strip().tolist()
 
-                    raw_df_growth = pd.DataFrame()
-                    raw_cols_growth = [c for c in [
-                        "날짜", "거래처", "품목코드", "품목명(공식)", "품목표시",
-                        "점착제코드", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "비고"
-                    ] if c in q.columns]
-
                     if len(customer_options) > 0:
                         left_col, m1, m2, m3 = st.columns([2.9, 1.2, 1.2, 1.2])
 
@@ -4702,17 +4635,49 @@ with tab6b:
                         ].copy()
 
                         if not common_month_axis.empty:
-                            sales_df = selected_customer_month[["월", "매출액"]].copy() if not selected_customer_month.empty else pd.DataFrame(columns=["월", "매출액"])
-                            qty_df = selected_customer_month[["월", "출고량"]].copy() if not selected_customer_month.empty else pd.DataFrame(columns=["월", "출고량"])
-
-                            fig_item_customer = build_dual_axis_sales_qty_chart(
+                            selected_sales = align_monthly_series(
                                 common_month_axis,
-                                sales_df=sales_df,
-                                qty_df=qty_df,
-                                title=f"{selected_item} / {selected_customer} 월별 매출 · 출고량 추이",
-                                sales_name="매출액",
-                                qty_name="출고량"
+                                selected_customer_month[["월", "매출액"]].copy() if not selected_customer_month.empty else pd.DataFrame(columns=["월", "매출액"]),
+                                "매출액"
                             )
+                            selected_qty = align_monthly_series(
+                                common_month_axis,
+                                selected_customer_month[["월", "출고량"]].copy() if ("출고량" in selected_customer_month.columns and not selected_customer_month.empty) else pd.DataFrame(columns=["월", "출고량"]),
+                                "출고량"
+                            )
+
+                            fig_item_customer = go.Figure()
+                            fig_item_customer.add_trace(go.Bar(
+                                x=selected_qty["날짜축"],
+                                y=selected_qty["출고량"],
+                                name="출고량(M2)",
+                                marker_color="rgba(54, 162, 235, 0.58)",
+                                text=[f"{v:,.1f}" if pd.notna(v) and v != 0 else "" for v in selected_qty["출고량"]],
+                                textposition="outside",
+                                yaxis="y2",
+                                hovertemplate="월: %{x|%Y-%m}<br>출고량: %{y:,.1f} M2<extra></extra>",
+                            ))
+                            fig_item_customer.add_trace(go.Scatter(
+                                x=selected_sales["날짜축"],
+                                y=selected_sales["매출액"],
+                                mode="lines+markers+text",
+                                text=[sales_to_manwon_label(v) for v in selected_sales["매출액"]],
+                                textposition="top center",
+                                name=selected_customer,
+                                line=dict(width=3, color="#e74c3c"),
+                                marker=dict(size=8),
+                                cliponaxis=False,
+                                hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
+                            ))
+                            fig_item_customer.update_layout(
+                                height=430,
+                                hovermode="x unified",
+                                margin=dict(l=20, r=55, t=40, b=90),
+                                yaxis=dict(title="매출액(원)", tickformat=",", automargin=True),
+                                yaxis2=dict(title="출고량(M2)", overlaying="y", side="right", tickformat=",.1f", automargin=True, showgrid=False),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                            )
+                            fig_item_customer = add_year_month_axis(fig_item_customer, common_month_axis["날짜축"])
                             st.plotly_chart(
                                 fig_item_customer,
                                 use_container_width=True,
@@ -4720,45 +4685,6 @@ with tab6b:
                             )
                         else:
                             st.info("선택한 업체의 해당 품목 판매금액 월별 데이터가 없습니다.")
-
-                        st.markdown("#### 선택 품목 원자료")
-
-                        raw_df_growth = q.copy()
-                        raw_df_growth = safe_make_product_label(raw_df_growth)
-
-                        if "거래처" in raw_df_growth.columns:
-                            raw_df_growth = raw_df_growth[
-                                raw_df_growth["거래처"].astype(str).str.strip() == str(selected_customer).strip()
-                            ]
-                        if "품목표시" in raw_df_growth.columns:
-                            raw_df_growth = raw_df_growth[
-                                raw_df_growth["품목표시"].astype(str).str.strip() == str(selected_item).strip()
-                            ]
-
-                        if raw_df_growth.empty:
-                            st.info("선택한 업체/품목의 원자료가 없습니다.")
-                        else:
-                            if "날짜" in raw_df_growth.columns:
-                                raw_df_growth = raw_df_growth.sort_values("날짜", ascending=False)
-
-                            clean_and_safe_display(
-                                raw_df_growth[raw_cols_growth],
-                                pinned_cols=["날짜", "거래처", "품목코드"],
-                                text_cols=["날짜", "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "비고"],
-                                column_width_overrides={
-                                    "날짜": 95,
-                                    "거래처": 145,
-                                    "품목코드": 145,
-                                    "품목명(공식)": 180,
-                                    "품목표시": 180,
-                                    "점착제코드": 80,
-                                    "가로폭(mm)": 80,
-                                    "수량(M2)": 90,
-                                    "단가(원/M2)": 85,
-                                    "금액(원)": 95,
-                                    "비고": 220,
-                                }
-                            )
                     else:
                         st.info("선택 가능한 업체가 없습니다.")
 
@@ -4797,43 +4723,38 @@ with tab6b:
                         },
                     )
 
-                    cust_export_df = cust_summary[customer_display_cols].copy()
-                    cust_csv = cust_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                    st.download_button(
-                        "📥 선택 품목 업체 증가현황 CSV 다운로드",
-                        data=cust_csv,
-                        file_name=f"매출증가_업체현황_{selected_item}.csv",
-                        mime="text/csv",
-                        key="download_growth_customer_csv"
+                    selected_item_raw = safe_make_product_label(q.copy())
+                    selected_item_raw = selected_item_raw[selected_item_raw["품목표시"].astype(str) == str(selected_item)].copy()
+                    if "날짜" in selected_item_raw.columns:
+                        selected_item_raw = selected_item_raw.sort_values("날짜", ascending=False)
+
+                    st.markdown("#### 선택 품목 원자료")
+                    raw_cols = [c for c in [
+                        "날짜", "거래처", "품목코드", "품목명(공식)", "품목표시",
+                        "점착제코드", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "비고"
+                    ] if c in selected_item_raw.columns]
+                    clean_and_safe_display(
+                        selected_item_raw[raw_cols] if raw_cols else pd.DataFrame(),
+                        pinned_cols=["날짜", "거래처", "품목코드"],
+                        text_cols=["날짜", "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "비고"],
                     )
 
-                    growth_excel_sheets = [
-                        ("품목요약", item_row[[
-                            c for c in [
-                                "품목코드", "품목표시", "품목증가점수", "전체매출액",
-                                "전반부_평균매출", "후반부_평균매출", "증가금액", "증가율(%)",
-                                "최근월매출", "직전월매출", "최근월환산매출",
-                                "최근월증가금액", "최근월증가율(%)",
-                                "최근월출고횟수", "최근월활성고객수", "지속출고개월수", "AI분석"
-                            ] if c in item_row.columns
-                        ]]),
-                        ("업체증가현황", cust_summary[customer_display_cols]),
-                        ("품목원자료", raw_df_growth[raw_cols_growth] if not raw_df_growth.empty else pd.DataFrame(columns=raw_cols_growth)),
-                        ("상위10업체월별", top10_month_export[[
-                            c for c in ["거래처", "월", "매출액", "출고량", "출고횟수"] if c in top10_month_export.columns
-                        ]] if not top10_month_export.empty else pd.DataFrame(columns=["거래처", "월", "매출액", "출고량", "출고횟수"])),
-                        ("품목월별", item_month[[
-                            c for c in ["월", "매출액", "출고량", "출고횟수", "활성고객수"] if c in item_month.columns
-                        ]]),
-                    ]
-
+                    growth_excel_sheets = {
+                        "품목요약": top_items[rank_cols].copy(),
+                        "업체증가현황": cust_summary[customer_display_cols].copy(),
+                        "품목원자료": selected_item_raw[raw_cols].copy() if raw_cols else pd.DataFrame(),
+                        "상위10업체월별": item_cust[item_cust["거래처"].isin(
+                            cust_summary.sort_values(["최근월증가금액", "최근월증가율(%)"], ascending=[False, False]).head(10)["거래처"].tolist()
+                        )].copy(),
+                        "품목월별": item_month.copy(),
+                    }
                     growth_excel_bytes = dataframe_to_excel_bytes(growth_excel_sheets)
                     st.download_button(
-                        "📥 선택 품목 상세 엑셀 다운로드(.xlsx)",
+                        "📥 선택 품목 통합 XLSX 다운로드",
                         data=growth_excel_bytes,
-                        file_name=f"매출증가_상세_{selected_item}.xlsx",
+                        file_name=f"매출증가_통합_{selected_item}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="download_growth_item_excel"
+                        key="download_growth_customer_xlsx"
                     )
                 else:
                     st.info("업체별 증가현황 데이터가 없습니다.")
