@@ -6,7 +6,13 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import holidays
+
+try:
+    import holidays
+    HOLIDAYS_AVAILABLE = True
+except Exception:
+    holidays = None
+    HOLIDAYS_AVAILABLE = False
 
 st.set_page_config(page_title="출고 이력 검색", layout="wide")
 
@@ -19,19 +25,13 @@ st.markdown("""
     padding-right: 0.7rem;
     max-width: 100%;
 }
-
-/* 가로 row 정렬 */
 div[data-testid="stHorizontalBlock"] {
     gap: 0.6rem;
     align-items: flex-end !important;
 }
-
-/* column 내부 wrapper 높이 안정화 */
 div[data-testid="column"] > div {
     width: 100% !important;
 }
-
-/* 라벨 공통 */
 label[data-testid="stWidgetLabel"] {
     margin-bottom: 0.18rem !important;
     padding-bottom: 0 !important;
@@ -43,8 +43,6 @@ label[data-testid="stWidgetLabel"] p {
     color: #4b5563 !important;
     font-weight: 600 !important;
 }
-
-/* metric box */
 div[data-testid="stMetric"] {
     background: #fafafa;
     border: 1px solid #eeeeee;
@@ -57,8 +55,6 @@ div[data-testid="stMetric"] {
     justify-content: center;
     box-sizing: border-box;
 }
-
-/* metric 내부 */
 div[data-testid="stMetric"] > div {
     justify-content: center !important;
 }
@@ -73,8 +69,6 @@ div[data-testid="stMetricValue"] {
     line-height: 1.05 !important;
     color: #111827 !important;
 }
-
-/* select 공통 wrapper */
 div[data-baseweb="select"] {
     min-height: 56px !important;
 }
@@ -88,8 +82,6 @@ div[data-baseweb="select"] > div {
     padding-top: 0 !important;
     padding-bottom: 0 !important;
 }
-
-/* select 내부 값 세로 중앙 */
 div[data-baseweb="select"] div[class*="valueContainer"] {
     min-height: 56px !important;
     height: 56px !important;
@@ -117,8 +109,6 @@ div[data-baseweb="select"] input::placeholder {
     color: #6b7280 !important;
     opacity: 1 !important;
 }
-
-/* choose options 복구 */
 div[data-baseweb="select"] div[class*="placeholder"] {
     color: #6b7280 !important;
     opacity: 1 !important;
@@ -128,16 +118,12 @@ div[data-baseweb="select"] div[class*="placeholder"] {
     display: flex !important;
     align-items: center !important;
 }
-
-/* multiselect tag 정렬 */
 div[data-baseweb="tag"] {
     display: flex !important;
     align-items: center !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
 }
-
-/* 사이드바 필터 글씨 선명하게 */
 section[data-testid="stSidebar"] label[data-testid="stWidgetLabel"] p {
     color: #374151 !important;
     font-weight: 700 !important;
@@ -180,20 +166,15 @@ section[data-testid="stSidebar"] div[data-baseweb="select"] input::placeholder {
     color: #6b7280 !important;
     opacity: 1 !important;
 }
-
-/* 멀티셀렉트 내부 텍스트 잘림 방지 */
 section[data-testid="stSidebar"] div[data-baseweb="select"] * {
     overflow: visible !important;
 }
-
-/* dataframe */
 div[data-testid="stDataFrame"] {
     width: 100%;
 }
 [data-testid="column"] {
     width: 100% !important;
 }
-
 .app-main-title {
     display: block;
     font-size: 1.8rem;
@@ -208,7 +189,6 @@ div[data-testid="stDataFrame"] {
     font-weight: 700;
     margin-bottom: 0.2rem;
 }
-
 @media (max-width: 1024px) {
     .block-container {
         padding-left: 0.45rem;
@@ -248,7 +228,6 @@ div[data-testid="stDataFrame"] {
         min-height: 52px !important;
         height: 52px !important;
     }
-
     section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="singleValue"],
     section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="placeholder"],
     section[data-testid="stSidebar"] div[data-baseweb="select"] input {
@@ -877,7 +856,16 @@ def infer_customer_sales_analysis(row):
 # ══════════════════════════════════════════════════════════
 # 영업일/엑셀/증가품목 분석 유틸
 # ══════════════════════════════════════════════════════════
-KR_HOLIDAYS = holidays.country_holidays("KR")
+KR_HOLIDAYS = holidays.country_holidays("KR") if HOLIDAYS_AVAILABLE else set()
+
+
+def is_business_day(dt):
+    ts = pd.Timestamp(dt)
+    if ts.weekday() >= 5:
+        return False
+    if HOLIDAYS_AVAILABLE and ts.date() in KR_HOLIDAYS:
+        return False
+    return True
 
 
 def count_business_days_in_month(target_date):
@@ -891,7 +879,7 @@ def count_business_days_in_month(target_date):
     cnt = 0
     for day in range(1, last_day + 1):
         dt = pd.Timestamp(year=year, month=month, day=day)
-        if dt.weekday() < 5 and dt.date() not in KR_HOLIDAYS:
+        if is_business_day(dt):
             cnt += 1
     return cnt
 
@@ -907,7 +895,7 @@ def count_business_days_elapsed_in_month(target_date):
     cnt = 0
     for day in range(1, day_limit + 1):
         dt = pd.Timestamp(year=year, month=month, day=day)
-        if dt.weekday() < 5 and dt.date() not in KR_HOLIDAYS:
+        if is_business_day(dt):
             cnt += 1
     return cnt
 
@@ -2626,6 +2614,9 @@ def build_customer_integrated_analysis(q, selected_customers_tuple):
 DEFAULT_FILE = "data.xlsx"
 
 st.markdown('<div class="app-main-title">출고 이력 검색(거래처/품목/가로폭/점착제)</div>', unsafe_allow_html=True)
+
+if not HOLIDAYS_AVAILABLE:
+    st.warning("`holidays` 패키지가 설치되지 않아 한국 공휴일은 제외하지 못하고, 주말 제외 영업일 기준으로 진행률을 계산합니다. requirements.txt 반영 후 재배포하면 공휴일까지 반영됩니다.")
 
 uploaded = st.file_uploader("📂 다른 파일 업로드 (미업로드 시 기본 데이터 자동 로드)", type=["xlsx"])
 
@@ -4391,10 +4382,14 @@ with tab6b:
 
             progress_pct = month_progress_ratio * 100.0
             if latest_dt is not None:
+                progress_desc = f"영업일 진행률 {elapsed_bd}/{total_bd}일 ≈ {progress_pct:.1f}%"
+                if HOLIDAYS_AVAILABLE:
+                    progress_desc += " (주말 + 한국 공휴일 제외)"
+                else:
+                    progress_desc += " (주말 제외 기준, 공휴일 패키지 미설치)"
                 st.info(
                     f"최근월({recent_month})은 {latest_dt.strftime('%Y-%m-%d')} 기준 데이터이며, "
-                    f"영업일 진행률 {elapsed_bd}/{total_bd}일 ≈ {progress_pct:.1f}%를 반영해 환산 매출을 계산했습니다. "
-                    f"(주말 + 한국 공휴일 제외)"
+                    f"{progress_desc}를 반영해 환산 매출을 계산했습니다."
                 )
 
             st.markdown("### 1) 증가 품목 우선순위 LIST (상위 30%)")
