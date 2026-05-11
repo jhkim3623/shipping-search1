@@ -1991,7 +1991,7 @@ def build_growth_item_analysis(q):
     if df.empty:
         return {}
 
-        all_months = sorted(df["월"].unique().tolist())
+    all_months = sorted(df["월"].unique().tolist())
     if len(all_months) < 2:
         return {
             "all_months": all_months,
