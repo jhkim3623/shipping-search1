@@ -286,6 +286,22 @@ def safe_make_product_label(df):
     return temp
 
 
+@st.cache_data(show_spinner=False)
+def prepare_labeled_monthly_df(q):
+    if q is None or q.empty:
+        return pd.DataFrame()
+
+    df = q.copy()
+    if "날짜" in df.columns:
+        df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
+        df["월"] = df["날짜"].dt.strftime("%Y-%m")
+    elif "월" not in df.columns:
+        df["월"] = ""
+
+    df = df[df["월"].notna() & (df["월"] != "")].copy()
+    return safe_make_product_label(df)
+
+
 def clean_and_safe_display(
     df,
     height=None,
@@ -1238,10 +1254,9 @@ def load_excel(file_bytes):
 
 @st.cache_data(show_spinner=False)
 def build_analysis_cache(q):
-    df = q.copy()
-    df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
-    df = df[df["월"].notna() & (df["월"] != "")].copy()
-    df = safe_make_product_label(df)
+    df = prepare_labeled_monthly_df(q)
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), []
 
     monthly_sales = (
         df.groupby(["거래처", "월"], dropna=False)["금액(원)"]
@@ -1762,10 +1777,10 @@ def build_return_decline_item_analysis(q):
     if q is None or q.empty:
         return {}
 
-    df = q.copy()
-    df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
-    df = df[df["월"].notna() & (df["월"] != "")].copy()
-    df = safe_make_product_label(df)
+    df = prepare_labeled_monthly_df(q)
+    if df.empty:
+        return {}
+
     df = build_return_base(df)
 
     all_months = sorted(df["월"].unique().tolist())
@@ -1828,56 +1843,90 @@ def build_return_decline_item_analysis(q):
     if not customer_return_reason_df.empty:
         customer_return_reason_df["거래처"] = customer_return_reason_df["거래처"].astype(str).str.strip()
 
-    rows = []
-    for (prod_code, prod_label), g in item_monthly.groupby(["품목코드", "품목표시"]):
-        g = g.sort_values("월").copy()
-        first_avg = g[g["월"].isin(first_half)]["매출액"].mean() if len(g[g["월"].isin(first_half)]) > 0 else 0
-        last_avg = g[g["월"].isin(last_half)]["매출액"].mean() if len(g[g["월"].isin(last_half)]) > 0 else 0
-        decline_amt = max(0.0, first_avg - last_avg)
-        decline_rate = ((decline_amt / first_avg) * 100) if first_avg > 0 else 0
-        slope = calc_slope(g["매출액"].tolist())
+    item_keys = item_monthly[["품목코드", "품목표시"]].drop_duplicates().copy()
 
-        cust_sub = item_customer_monthly[item_customer_monthly["품목코드"].astype(str) == str(prod_code)].copy()
-        first_c = (
-            cust_sub[cust_sub["월"].isin(first_half)]
-            .groupby("거래처", as_index=False)["매출액"]
-            .mean()
-            .rename(columns={"매출액": "전반평균"})
+    first_item = (
+        item_monthly[item_monthly["월"].isin(first_half)]
+        .groupby(["품목코드", "품목표시"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "전반부_평균매출"})
+    )
+    last_item = (
+        item_monthly[item_monthly["월"].isin(last_half)]
+        .groupby(["품목코드", "품목표시"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "후반부_평균매출"})
+    )
+    item_totals = (
+        item_monthly.groupby(["품목코드", "품목표시"], as_index=False)
+        .agg(
+            전체매출액=("매출액", "sum"),
+            반품금액=("반품금액", "sum"),
         )
-        last_c = (
-            cust_sub[cust_sub["월"].isin(last_half)]
-            .groupby("거래처", as_index=False)["매출액"]
-            .mean()
-            .rename(columns={"매출액": "후반평균"})
-        )
-        cc = first_c.merge(last_c, on="거래처", how="outer").fillna(0)
-        cc["감소금액"] = cc["전반평균"] - cc["후반평균"]
-        decline_customer_cnt = int((cc["감소금액"] > 0).sum()) if not cc.empty else 0
+    )
+    item_slopes = (
+        item_monthly.sort_values(["품목코드", "품목표시", "월"])
+        .groupby(["품목코드", "품목표시"])["매출액"]
+        .apply(lambda s: calc_slope(s.tolist()))
+        .reset_index(name="최근기울기")
+    )
 
-        total_sales = float(g["매출액"].sum())
-        total_return_amt = float(g["반품금액"].sum())
-        return_rate = (total_return_amt / total_sales * 100) if total_sales > 0 else 0
+    cust_first = (
+        item_customer_monthly[item_customer_monthly["월"].isin(first_half)]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "전반평균"})
+    )
+    cust_last = (
+        item_customer_monthly[item_customer_monthly["월"].isin(last_half)]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "후반평균"})
+    )
+    cust_delta = cust_first.merge(cust_last, on=["품목코드", "품목표시", "거래처"], how="outer").fillna(0)
+    cust_delta["감소금액"] = cust_delta["전반평균"] - cust_delta["후반평균"]
+    decline_customer_cnt = (
+        cust_delta.assign(감소고객여부=(cust_delta["감소금액"] > 0).astype(int))
+        .groupby(["품목코드", "품목표시"], as_index=False)["감소고객여부"]
+        .sum()
+        .rename(columns={"감소고객여부": "감소고객사수"})
+    )
 
-        rr = return_reason_df[return_reason_df["품목코드"].astype(str) == str(prod_code)].copy()
-        top_reason = "반품 없음" if rr.empty else summarize_return_reason_text(rr["주요반품원인"])
+    top_reason_df = (
+        return_reason_df.groupby(["품목코드", "품목표시"], as_index=False)["주요반품원인"]
+        .agg(summarize_return_reason_text)
+    ) if not return_reason_df.empty else pd.DataFrame(columns=["품목코드", "품목표시", "주요반품원인"])
 
-        rows.append({
-            "품목코드": str(prod_code),
-            "품목표시": str(prod_label),
-            "전체매출액": total_sales,
-            "전반부_평균매출": int(round(first_avg, 0)),
-            "후반부_평균매출": int(round(last_avg, 0)),
-            "감소금액": int(round(decline_amt, 0)),
-            "하락률(%)": round(decline_rate, 1),
-            "감소고객사수": decline_customer_cnt,
-            "반품금액": int(round(total_return_amt, 0)),
-            "반품율(%)": round(return_rate, 1),
-            "최근기울기": slope,
-            "주요반품원인": top_reason,
-        })
+    item_rank = item_keys.merge(first_item, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(last_item, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(item_totals, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(item_slopes, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(decline_customer_cnt, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(top_reason_df, on=["품목코드", "품목표시"], how="left")
 
-    item_rank = pd.DataFrame(rows)
+    for col in ["전반부_평균매출", "후반부_평균매출", "전체매출액", "반품금액", "최근기울기", "감소고객사수"]:
+        if col in item_rank.columns:
+            item_rank[col] = pd.to_numeric(item_rank[col], errors="coerce").fillna(0)
+
+    item_rank["감소금액"] = (item_rank["전반부_평균매출"] - item_rank["후반부_평균매출"]).clip(lower=0)
+    item_rank["하락률(%)"] = np.where(
+        item_rank["전반부_평균매출"] > 0,
+        (item_rank["감소금액"] / item_rank["전반부_평균매출"]) * 100,
+        0,
+    )
+    item_rank["반품율(%)"] = np.where(
+        item_rank["전체매출액"] > 0,
+        (item_rank["반품금액"] / item_rank["전체매출액"]) * 100,
+        0,
+    )
+    item_rank["주요반품원인"] = item_rank["주요반품원인"].fillna("반품 없음")
+
     if not item_rank.empty:
+        for col in ["전반부_평균매출", "후반부_평균매출", "전체매출액", "감소금액", "반품금액", "감소고객사수"]:
+            item_rank[col] = item_rank[col].round(0).astype(int)
+        item_rank["하락률(%)"] = item_rank["하락률(%)"].round(1)
+        item_rank["반품율(%)"] = item_rank["반품율(%)"].round(1)
+
         item_rank["품목하락점수"] = (
             scale_to_100(item_rank["감소금액"]) * 0.45 +
             scale_to_100(item_rank["하락률(%)"]) * 0.20 +
@@ -1912,11 +1961,9 @@ def build_growth_item_analysis(q):
     if q is None or q.empty:
         return {}
 
-    df = q.copy()
-    df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
-    df["월"] = df["날짜"].dt.strftime("%Y-%m")
-    df = df[df["월"].notna() & (df["월"] != "")].copy()
-    df = safe_make_product_label(df)
+    df = prepare_labeled_monthly_df(q)
+    if df.empty:
+        return {}
 
     for c in ["금액(원)", "수량(M2)"]:
         if c in df.columns:
@@ -1971,79 +2018,125 @@ def build_growth_item_analysis(q):
     item_customer_monthly["거래처"] = item_customer_monthly["거래처"].astype(str).str.strip()
     item_customer_monthly["날짜축"] = pd.to_datetime(item_customer_monthly["월"] + "-01", errors="coerce")
 
-    rows = []
-    for (prod_code, prod_label), g in item_monthly.groupby(["품목코드", "품목표시"]):
-        g = g.sort_values("월").copy()
+    item_keys = item_monthly[["품목코드", "품목표시"]].drop_duplicates().copy()
 
-        first_avg = g[g["월"].isin(first_half)]["매출액"].mean() if len(g[g["월"].isin(first_half)]) > 0 else 0
-        last_avg = g[g["월"].isin(last_half)]["매출액"].mean() if len(g[g["월"].isin(last_half)]) > 0 else 0
+    first_item = (
+        item_monthly[item_monthly["월"].isin(first_half)]
+        .groupby(["품목코드", "품목표시"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "전반부_평균매출"})
+    )
+    last_item = (
+        item_monthly[item_monthly["월"].isin(last_half)]
+        .groupby(["품목코드", "품목표시"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "후반부_평균매출"})
+    )
+    recent_item = (
+        item_monthly[item_monthly["월"] == recent_month]
+        .groupby(["품목코드", "품목표시"], as_index=False)
+        .agg(
+            최근월매출=("매출액", "sum"),
+            최근월출고횟수=("출고횟수", "sum"),
+            최근월활성고객수=("활성고객수", "sum"),
+        )
+    )
+    prev_item = (
+        item_monthly[item_monthly["월"] == prev_month]
+        .groupby(["품목코드", "품목표시"], as_index=False)["매출액"]
+        .sum()
+        .rename(columns={"매출액": "직전월매출"})
+    ) if prev_month else pd.DataFrame(columns=["품목코드", "품목표시", "직전월매출"])
+    item_totals = (
+        item_monthly.groupby(["품목코드", "품목표시"], as_index=False)["매출액"]
+        .sum()
+        .rename(columns={"매출액": "전체매출액"})
+    )
+    active_months = (
+        item_monthly[item_monthly["매출액"] > 0]
+        .groupby(["품목코드", "품목표시"], as_index=False)
+        .size()
+        .rename(columns={"size": "지속출고개월수"})
+    )
+    item_slopes = (
+        item_monthly.sort_values(["품목코드", "품목표시", "월"])
+        .groupby(["품목코드", "품목표시"])["매출액"]
+        .apply(lambda s: calc_slope(s.tolist()))
+        .reset_index(name="최근기울기")
+    )
 
-        increase_amt = max(0.0, last_avg - first_avg)
-        increase_rate = ((last_avg - first_avg) / first_avg * 100) if first_avg > 0 else (100.0 if last_avg > 0 else 0.0)
-        slope = calc_slope(g["매출액"].tolist())
+    cust_first = (
+        item_customer_monthly[item_customer_monthly["월"].isin(first_half)]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "전반평균"})
+    )
+    cust_last = (
+        item_customer_monthly[item_customer_monthly["월"].isin(last_half)]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "후반평균"})
+    )
+    cust_delta = cust_first.merge(cust_last, on=["품목코드", "품목표시", "거래처"], how="outer").fillna(0)
+    cust_delta["증가금액"] = cust_delta["후반평균"] - cust_delta["전반평균"]
+    increase_customer_cnt = (
+        cust_delta.assign(증가고객여부=(cust_delta["증가금액"] > 0).astype(int))
+        .groupby(["품목코드", "품목표시"], as_index=False)["증가고객여부"]
+        .sum()
+        .rename(columns={"증가고객여부": "증가고객사수"})
+    )
 
-        recent_row = g[g["월"] == recent_month]
-        prev_row = g[g["월"] == prev_month] if prev_month else pd.DataFrame()
+    item_rank = item_keys.merge(first_item, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(last_item, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(recent_item, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(prev_item, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(item_totals, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(active_months, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(item_slopes, on=["품목코드", "품목표시"], how="left")
+    item_rank = item_rank.merge(increase_customer_cnt, on=["품목코드", "품목표시"], how="left")
 
-        recent_sales = float(recent_row["매출액"].sum()) if not recent_row.empty else 0.0
-        prev_sales = float(prev_row["매출액"].sum()) if not prev_row.empty else 0.0
-        recent_ship_cnt = float(recent_row["출고횟수"].sum()) if not recent_row.empty else 0.0
-        recent_active_customers = float(recent_row["활성고객수"].sum()) if not recent_row.empty else 0.0
+    numeric_cols = [
+        "전반부_평균매출", "후반부_평균매출", "최근월매출", "직전월매출", "최근월출고횟수",
+        "최근월활성고객수", "전체매출액", "지속출고개월수", "최근기울기", "증가고객사수"
+    ]
+    for col in numeric_cols:
+        if col in item_rank.columns:
+            item_rank[col] = pd.to_numeric(item_rank[col], errors="coerce").fillna(0)
 
-        recent_calc = calc_recent_month_increase_score(
-            recent_sales=recent_sales,
-            prev_sales=prev_sales,
+    item_rank["증가금액"] = (item_rank["후반부_평균매출"] - item_rank["전반부_평균매출"]).clip(lower=0)
+    item_rank["증가율(%)"] = np.where(
+        item_rank["전반부_평균매출"] > 0,
+        ((item_rank["후반부_평균매출"] - item_rank["전반부_평균매출"]) / item_rank["전반부_평균매출"]) * 100,
+        np.where(item_rank["후반부_평균매출"] > 0, 100.0, 0.0)
+    )
+
+    recent_calc_rows = []
+    for row in item_rank.itertuples(index=False):
+        recent_calc_rows.append(calc_recent_month_increase_score(
+            recent_sales=float(getattr(row, "최근월매출", 0.0)),
+            prev_sales=float(getattr(row, "직전월매출", 0.0)),
             progress_ratio=month_progress_ratio,
-            recent_ship_cnt=recent_ship_cnt,
-            recent_active_customers=recent_active_customers,
-            recent_slope=slope
-        )
+            recent_ship_cnt=float(getattr(row, "최근월출고횟수", 0.0)),
+            recent_active_customers=float(getattr(row, "최근월활성고객수", 0.0)),
+            recent_slope=float(getattr(row, "최근기울기", 0.0)),
+        ))
+    recent_calc_df = pd.DataFrame(recent_calc_rows)
+    if not recent_calc_df.empty:
+        item_rank = pd.concat([item_rank.reset_index(drop=True), recent_calc_df.reset_index(drop=True)], axis=1)
 
-        cust_sub = item_customer_monthly[item_customer_monthly["품목코드"].astype(str) == str(prod_code)].copy()
-
-        first_c = (
-            cust_sub[cust_sub["월"].isin(first_half)]
-            .groupby("거래처", as_index=False)["매출액"]
-            .mean()
-            .rename(columns={"매출액": "전반평균"})
-        )
-        last_c = (
-            cust_sub[cust_sub["월"].isin(last_half)]
-            .groupby("거래처", as_index=False)["매출액"]
-            .mean()
-            .rename(columns={"매출액": "후반평균"})
-        )
-        cc = first_c.merge(last_c, on="거래처", how="outer").fillna(0)
-        cc["증가금액"] = cc["후반평균"] - cc["전반평균"]
-        increase_customer_cnt = int((cc["증가금액"] > 0).sum()) if not cc.empty else 0
-
-        active_months = int((g["매출액"] > 0).sum())
-        total_sales = float(g["매출액"].sum())
-
-        rows.append({
-            "품목코드": str(prod_code),
-            "품목표시": str(prod_label),
-            "전체매출액": total_sales,
-            "전반부_평균매출": int(round(first_avg, 0)),
-            "후반부_평균매출": int(round(last_avg, 0)),
-            "증가금액": int(round(increase_amt, 0)),
-            "증가율(%)": round(increase_rate, 1),
-            "증가고객사수": increase_customer_cnt,
-            "지속출고개월수": active_months,
-            "최근월매출": int(round(recent_sales, 0)),
-            "직전월매출": int(round(prev_sales, 0)),
-            "최근월출고횟수": int(round(recent_ship_cnt, 0)),
-            "최근월활성고객수": int(round(recent_active_customers, 0)),
-            "최근기울기": slope,
-            "최근월환산매출": int(round(recent_calc["최근월환산매출"], 0)),
-            "최근월증가금액": int(round(recent_calc["최근월증가금액"], 0)),
-            "최근월증가율(%)": round(recent_calc["최근월증가율(%)"], 1),
-            "저출고고증가보너스": round(recent_calc["저출고고증가보너스"], 1),
-            "집중출고보너스": round(recent_calc["집중출고보너스"], 1),
-        })
-
-    item_rank = pd.DataFrame(rows)
     if not item_rank.empty:
+        int_cols = [
+            "전체매출액", "전반부_평균매출", "후반부_평균매출", "증가금액", "증가고객사수",
+            "지속출고개월수", "최근월매출", "직전월매출", "최근월출고횟수", "최근월활성고객수",
+            "최근월환산매출", "최근월증가금액"
+        ]
+        for col in int_cols:
+            if col in item_rank.columns:
+                item_rank[col] = pd.to_numeric(item_rank[col], errors="coerce").fillna(0).round(0).astype(int)
+        for col in ["증가율(%)", "최근월증가율(%)", "저출고고증가보너스", "집중출고보너스"]:
+            if col in item_rank.columns:
+                item_rank[col] = pd.to_numeric(item_rank[col], errors="coerce").fillna(0).round(1)
+
         item_rank["품목증가점수"] = (
             scale_to_100(item_rank["최근월증가금액"]) * 0.30 +
             scale_to_100(item_rank["최근월증가율(%)"]) * 0.22 +
@@ -2066,57 +2159,96 @@ def build_growth_item_analysis(q):
         ).reset_index(drop=True)
         item_rank["순위"] = range(1, len(item_rank) + 1)
 
-    growth_customer_rows = []
-    for (prod_code, prod_label, cust_name), g in item_customer_monthly.groupby(["품목코드", "품목표시", "거래처"]):
-        g = g.sort_values("월").copy()
+    growth_customer_keys = item_customer_monthly[["품목코드", "품목표시", "거래처"]].drop_duplicates().copy()
+    growth_first = (
+        item_customer_monthly[item_customer_monthly["월"].isin(first_half)]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "전반부_평균매출"})
+    )
+    growth_last = (
+        item_customer_monthly[item_customer_monthly["월"].isin(last_half)]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)["매출액"]
+        .mean()
+        .rename(columns={"매출액": "후반부_평균매출"})
+    )
+    growth_recent = (
+        item_customer_monthly[item_customer_monthly["월"] == recent_month]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)
+        .agg(
+            최근월매출=("매출액", "sum"),
+            최근월출고횟수=("출고횟수", "sum"),
+        )
+    )
+    growth_prev = (
+        item_customer_monthly[item_customer_monthly["월"] == prev_month]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)["매출액"]
+        .sum()
+        .rename(columns={"매출액": "직전월매출"})
+    ) if prev_month else pd.DataFrame(columns=["품목코드", "품목표시", "거래처", "직전월매출"])
+    growth_active = (
+        item_customer_monthly[item_customer_monthly["매출액"] > 0]
+        .groupby(["품목코드", "품목표시", "거래처"], as_index=False)
+        .size()
+        .rename(columns={"size": "지속출고개월수"})
+    )
+    growth_slopes = (
+        item_customer_monthly.sort_values(["품목코드", "품목표시", "거래처", "월"])
+        .groupby(["품목코드", "품목표시", "거래처"])["매출액"]
+        .apply(lambda s: calc_slope(s.tolist()))
+        .reset_index(name="최근기울기")
+    )
 
-        first_vals = g[g["월"].isin(first_half)]["매출액"]
-        last_vals = g[g["월"].isin(last_half)]["매출액"]
+    growth_customer_summary = growth_customer_keys.merge(growth_first, on=["품목코드", "품목표시", "거래처"], how="left")
+    growth_customer_summary = growth_customer_summary.merge(growth_last, on=["품목코드", "품목표시", "거래처"], how="left")
+    growth_customer_summary = growth_customer_summary.merge(growth_recent, on=["품목코드", "품목표시", "거래처"], how="left")
+    growth_customer_summary = growth_customer_summary.merge(growth_prev, on=["품목코드", "품목표시", "거래처"], how="left")
+    growth_customer_summary = growth_customer_summary.merge(growth_active, on=["품목코드", "품목표시", "거래처"], how="left")
+    growth_customer_summary = growth_customer_summary.merge(growth_slopes, on=["품목코드", "품목표시", "거래처"], how="left")
 
-        first_avg = float(first_vals.mean()) if len(first_vals) > 0 else 0.0
-        last_avg = float(last_vals.mean()) if len(last_vals) > 0 else 0.0
-        increase_amt = max(0.0, last_avg - first_avg)
-        increase_rate = ((last_avg - first_avg) / first_avg * 100.0) if first_avg > 0 else (100.0 if last_avg > 0 else 0.0)
+    growth_num_cols = [
+        "전반부_평균매출", "후반부_평균매출", "최근월매출", "직전월매출", "최근월출고횟수", "지속출고개월수", "최근기울기"
+    ]
+    for col in growth_num_cols:
+        if col in growth_customer_summary.columns:
+            growth_customer_summary[col] = pd.to_numeric(growth_customer_summary[col], errors="coerce").fillna(0)
 
-        recent_row = g[g["월"] == recent_month]
-        prev_row = g[g["월"] == prev_month] if prev_month else pd.DataFrame()
-
-        recent_sales = float(recent_row["매출액"].sum()) if not recent_row.empty else 0.0
-        prev_sales = float(prev_row["매출액"].sum()) if not prev_row.empty else 0.0
-        recent_ship_cnt = float(recent_row["출고횟수"].sum()) if not recent_row.empty else 0.0
-
-        recent_calc = calc_recent_month_increase_score(
-            recent_sales=recent_sales,
-            prev_sales=prev_sales,
-            progress_ratio=month_progress_ratio,
-            recent_ship_cnt=recent_ship_cnt,
-            recent_active_customers=1,
-            recent_slope=calc_slope(g["매출액"].tolist())
+    if not growth_customer_summary.empty:
+        growth_customer_summary["증가금액"] = (growth_customer_summary["후반부_평균매출"] - growth_customer_summary["전반부_평균매출"]).clip(lower=0)
+        growth_customer_summary["증가율(%)"] = np.where(
+            growth_customer_summary["전반부_평균매출"] > 0,
+            ((growth_customer_summary["후반부_평균매출"] - growth_customer_summary["전반부_평균매출"]) / growth_customer_summary["전반부_평균매출"]) * 100.0,
+            np.where(growth_customer_summary["후반부_평균매출"] > 0, 100.0, 0.0)
         )
 
-        active_months = int((g["매출액"] > 0).sum())
-        slope = calc_slope(g["매출액"].tolist())
+        growth_recent_calc_rows = []
+        for row in growth_customer_summary.itertuples(index=False):
+            growth_recent_calc_rows.append(calc_recent_month_increase_score(
+                recent_sales=float(getattr(row, "최근월매출", 0.0)),
+                prev_sales=float(getattr(row, "직전월매출", 0.0)),
+                progress_ratio=month_progress_ratio,
+                recent_ship_cnt=float(getattr(row, "최근월출고횟수", 0.0)),
+                recent_active_customers=1,
+                recent_slope=float(getattr(row, "최근기울기", 0.0)),
+            ))
+        growth_recent_calc_df = pd.DataFrame(growth_recent_calc_rows)
+        if not growth_recent_calc_df.empty:
+            growth_customer_summary = pd.concat(
+                [growth_customer_summary.reset_index(drop=True), growth_recent_calc_df.reset_index(drop=True)],
+                axis=1
+            )
 
-        growth_customer_rows.append({
-            "품목코드": str(prod_code),
-            "품목표시": str(prod_label),
-            "거래처": str(cust_name).strip(),
-            "전반부_평균매출": int(round(first_avg, 0)),
-            "후반부_평균매출": int(round(last_avg, 0)),
-            "증가금액": int(round(increase_amt, 0)),
-            "증가율(%)": round(increase_rate, 1),
-            "최근월매출": int(round(recent_sales, 0)),
-            "직전월매출": int(round(prev_sales, 0)),
-            "최근월환산매출": int(round(recent_calc["최근월환산매출"], 0)),
-            "최근월증가금액": int(round(recent_calc["최근월증가금액"], 0)),
-            "최근월증가율(%)": round(recent_calc["최근월증가율(%)"], 1),
-            "최근월출고횟수": int(round(recent_ship_cnt, 0)),
-            "지속출고개월수": active_months,
-            "최근기울기": slope,
-        })
+        int_cols = [
+            "전반부_평균매출", "후반부_평균매출", "증가금액", "최근월매출", "직전월매출",
+            "최근월환산매출", "최근월증가금액", "최근월출고횟수", "지속출고개월수"
+        ]
+        for col in int_cols:
+            if col in growth_customer_summary.columns:
+                growth_customer_summary[col] = pd.to_numeric(growth_customer_summary[col], errors="coerce").fillna(0).round(0).astype(int)
+        for col in ["증가율(%)", "최근월증가율(%)"]:
+            if col in growth_customer_summary.columns:
+                growth_customer_summary[col] = pd.to_numeric(growth_customer_summary[col], errors="coerce").fillna(0).round(1)
 
-    growth_customer_summary = pd.DataFrame(growth_customer_rows)
-    if not growth_customer_summary.empty:
         growth_customer_summary["증가원인"] = growth_customer_summary.apply(infer_customer_item_growth_reason, axis=1)
         growth_customer_summary["AI분석"] = growth_customer_summary.apply(infer_ai_growth_analysis, axis=1)
 
@@ -2803,6 +2935,8 @@ if sdate is not None and edate is not None and "날짜" in q.columns:
         (q["날짜"].dt.date >= sdate) &
         (q["날짜"].dt.date <= edate)
     ]
+
+q_labeled = prepare_labeled_monthly_df(q)
 
 tab1, tab2, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs([
     "거래처별 검색",
@@ -4735,7 +4869,7 @@ with tab6:
                     )
 
                     st.markdown("#### 선택 품목 원자료")
-                    selected_item_raw = safe_make_product_label(q.copy())
+                    selected_item_raw = q_labeled.copy()
                     selected_item_raw = selected_item_raw[
                         selected_item_raw["품목표시"].astype(str) == str(selected_item)
                     ].copy()
@@ -5257,7 +5391,7 @@ with tab6b:
                     )
 
                     st.markdown("#### 선택 품목 원자료")
-                    selected_item_raw = safe_make_product_label(q.copy())
+                    selected_item_raw = q_labeled.copy()
                     selected_item_raw["거래처"] = selected_item_raw["거래처"].astype(str).str.strip()
                     selected_item_raw["품목표시"] = selected_item_raw["품목표시"].astype(str).str.strip()
 
