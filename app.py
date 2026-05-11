@@ -328,7 +328,7 @@ def prepare_item_analysis_source(q, include_return=False):
     if include_return:
         df = build_return_base(df)
 
-    for col in ["거래처", "품목코드", "품목표시", "월"]:
+    for col in ["거래처", "품목코드", "품목표시"]:
         df[col] = df[col].astype("category")
 
     return df
@@ -671,7 +671,7 @@ def build_month_axis_frame(months):
     if axis_df.empty:
         axis_df["날짜축"] = pd.NaT
         return axis_df
-    axis_df["날짜축"] = pd.to_datetime(axis_df["월"] + "-01", errors="coerce")
+    axis_df["날짜축"] = pd.to_datetime(axis_df["월"].astype(str) + "-01", errors="coerce")
     axis_df = axis_df.dropna(subset=["날짜축"]).sort_values("날짜축").reset_index(drop=True)
     return axis_df
 
@@ -1297,14 +1297,14 @@ def build_analysis_cache(q):
     )
 
     customer_total_monthly = monthly_sales.copy()
-    customer_total_monthly["날짜축"] = pd.to_datetime(customer_total_monthly["월"] + "-01")
+    customer_total_monthly["날짜축"] = pd.to_datetime(customer_total_monthly["월"].astype(str) + "-01", errors="coerce")
 
     product_monthly = (
         df.groupby(["거래처", "품목코드", "품목명(공식)", "품목표시", "월"], dropna=False, observed=True, sort=False)["금액(원)"]
         .sum()
         .reset_index()
     )
-    product_monthly["날짜축"] = pd.to_datetime(product_monthly["월"] + "-01")
+    product_monthly["날짜축"] = pd.to_datetime(product_monthly["월"].astype(str) + "-01", errors="coerce")
     product_monthly["만원라벨"] = product_monthly["금액(원)"].apply(sales_to_manwon_label)
 
     all_months = sorted(df["월"].unique().tolist())
@@ -1838,7 +1838,7 @@ def build_return_decline_item_analysis(q):
         )
         .reset_index()
     )
-    item_monthly["날짜축"] = pd.to_datetime(item_monthly["월"] + "-01", errors="coerce")
+    item_monthly["날짜축"] = pd.to_datetime(item_monthly["월"].astype(str) + "-01", errors="coerce")
 
     item_customer_monthly = (
         df.groupby(["품목코드", "품목표시", "거래처", "월"], dropna=False, observed=True, sort=False)
@@ -1851,7 +1851,7 @@ def build_return_decline_item_analysis(q):
         .reset_index()
     )
     item_customer_monthly["거래처"] = item_customer_monthly["거래처"].astype(str).str.strip()
-    item_customer_monthly["날짜축"] = pd.to_datetime(item_customer_monthly["월"] + "-01", errors="coerce")
+    item_customer_monthly["날짜축"] = pd.to_datetime(item_customer_monthly["월"].astype(str) + "-01", errors="coerce")
 
     return_reason_df = (
         df[df["반품여부_표준"]]
@@ -2024,7 +2024,7 @@ def build_growth_item_analysis(q):
         )
         .reset_index()
     )
-    item_monthly["날짜축"] = pd.to_datetime(item_monthly["월"] + "-01", errors="coerce")
+    item_monthly["날짜축"] = pd.to_datetime(item_monthly["월"].astype(str) + "-01", errors="coerce")
 
     item_customer_monthly = (
         df.groupby(["품목코드", "품목표시", "거래처", "월"], dropna=False, observed=True, sort=False)
@@ -2036,7 +2036,7 @@ def build_growth_item_analysis(q):
         .reset_index()
     )
     item_customer_monthly["거래처"] = item_customer_monthly["거래처"].astype(str).str.strip()
-    item_customer_monthly["날짜축"] = pd.to_datetime(item_customer_monthly["월"] + "-01", errors="coerce")
+    item_customer_monthly["날짜축"] = pd.to_datetime(item_customer_monthly["월"].astype(str) + "-01", errors="coerce")
 
     item_keys = item_monthly[["품목코드", "품목표시"]].drop_duplicates().copy()
 
@@ -2323,7 +2323,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
         .sort_values(["거래처", "월"])
         .reset_index(drop=True)
     )
-    customer_monthly["날짜축"] = pd.to_datetime(customer_monthly["월"] + "-01", errors="coerce")
+    customer_monthly["날짜축"] = pd.to_datetime(customer_monthly["월"].astype(str) + "-01", errors="coerce")
 
     customer_item_monthly = (
         df.groupby(["거래처", "품목표시", "월"], as_index=False)
@@ -2334,7 +2334,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
         .sort_values(["거래처", "품목표시", "월"])
         .reset_index(drop=True)
     )
-    customer_item_monthly["날짜축"] = pd.to_datetime(customer_item_monthly["월"] + "-01", errors="coerce")
+    customer_item_monthly["날짜축"] = pd.to_datetime(customer_item_monthly["월"].astype(str) + "-01", errors="coerce")
 
     item_summary = (
         df.groupby(["거래처", "품목표시"], as_index=False)
@@ -2620,7 +2620,7 @@ def build_customer_integrated_analysis(q, selected_customers_tuple, selected_end
         .sort_values("월")
         .reset_index(drop=True)
     )
-    integrated_monthly["날짜축"] = pd.to_datetime(integrated_monthly["월"] + "-01", errors="coerce")
+    integrated_monthly["날짜축"] = pd.to_datetime(integrated_monthly["월"].astype(str) + "-01", errors="coerce")
 
     integrated_item_monthly = (
         df.groupby(["품목표시", "월"], as_index=False)
@@ -2631,7 +2631,7 @@ def build_customer_integrated_analysis(q, selected_customers_tuple, selected_end
         .sort_values(["품목표시", "월"])
         .reset_index(drop=True)
     )
-    integrated_item_monthly["날짜축"] = pd.to_datetime(integrated_item_monthly["월"] + "-01", errors="coerce")
+    integrated_item_monthly["날짜축"] = pd.to_datetime(integrated_item_monthly["월"].astype(str) + "-01", errors="coerce")
 
     integrated_item_summary = (
         df.groupby("품목표시", as_index=False)
