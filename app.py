@@ -2580,14 +2580,31 @@ sel_adh = st.sidebar.multiselect(
 date_min = pd.to_datetime(rec["날짜"].min()) if "날짜" in rec.columns else None
 date_max = pd.to_datetime(rec["날짜"].max()) if "날짜" in rec.columns else None
 
+sdate = None
+edate = None
+
 if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
-    picked = st.sidebar.date_input("기간", [date_min.date(), date_max.date()])
-    if isinstance(picked, (list, tuple)) and len(picked) == 2:
-        sdate, edate = picked
-    else:
-        sdate = edate = None
-else:
-    sdate = edate = None
+    st.sidebar.markdown("#### 기간")
+
+    sdate = st.sidebar.date_input(
+        "시작일",
+        value=date_min.date(),
+        min_value=date_min.date(),
+        max_value=date_max.date(),
+        key="filter_start_date"
+    )
+
+    edate = st.sidebar.date_input(
+        "종료일",
+        value=date_max.date(),
+        min_value=date_min.date(),
+        max_value=date_max.date(),
+        key="filter_end_date"
+    )
+
+    if sdate > edate:
+        st.sidebar.error("시작일은 종료일보다 늦을 수 없습니다.")
+        st.stop()
 
 st.sidebar.markdown("---")
 st.sidebar.caption("💡 견적 레퍼런스: 품목코드·점착제코드·기간 필터 위주로 사용하세요.")
@@ -2603,8 +2620,11 @@ if sel_prod and "품목코드" in q.columns:
     q = q[q["품목코드"].astype(str).isin(sel_prod)]
 if sel_adh and "점착제코드" in q.columns:
     q = q[q["점착제코드"].astype(str).isin(sel_adh)]
-if sdate and edate and "날짜" in q.columns:
-    q = q[(q["날짜"] >= pd.to_datetime(sdate)) & (q["날짜"] <= pd.to_datetime(edate))]
+if sdate is not None and edate is not None and "날짜" in q.columns:
+    q = q[
+        (q["날짜"].dt.date >= sdate) &
+        (q["날짜"].dt.date <= edate)
+    ]
 
 tab1, tab2, tab3, tab4, tab5, tab5b, tab6, tab6b, tab7 = st.tabs([
     "거래처별 검색",
