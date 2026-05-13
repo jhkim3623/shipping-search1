@@ -321,6 +321,28 @@ def format_number_text(value, decimals=0):
     return f"{num:,.{int(decimals)}f}"
 
 
+def init_formatted_input_state(key, default_value, decimals=0):
+    if key not in st.session_state:
+        st.session_state[key] = format_number_text(default_value, decimals)
+
+
+def normalize_numeric_session_state(key, decimals=0, default=0.0):
+    current = st.session_state.get(key, "")
+    parsed = parse_numeric_text_input(current, default)
+    st.session_state[key] = format_number_text(parsed, decimals)
+
+
+def formatted_numeric_text_input(label, default_value, key, decimals=0, help_text=None):
+    init_formatted_input_state(key, default_value, decimals)
+    return st.text_input(
+        label,
+        key=key,
+        help=help_text,
+        on_change=normalize_numeric_session_state,
+        args=(key, decimals, default_value),
+    )
+
+
 def build_filtered_recent_snapshot(df, group_cols, include_width_history=False, width_group_cols=None):
     base_cols = list(group_cols or [])
     extra_cols = ["최근날짜", "최근단가"]
@@ -1887,6 +1909,125 @@ def build_customer_monthly_scale_profile(q_all):
     return profile
 
 
+def build_default_quote_price_rules(default_date=None, target_product_code=""):
+    base_date = pd.to_datetime(default_date if default_date is not None else "2026-04-15", errors="coerce")
+    if pd.isna(base_date):
+        base_date = pd.Timestamp("2026-04-15")
+    rows = [{
+        "적용구분": "품목코드" if str(target_product_code).strip() else "전체",
+        "적용값": str(target_product_code).strip() if str(target_product_code).strip() else "",
+        "인상기준일": base_date.date(),
+        "인상률(%)": 0.0,
+    }]
+    return pd.DataFrame(rows)
+
+
+def normalize_quote_price_rules(rules_df, default_date=None, target_product_code=""):
+    default_df = build_default_quote_price_rules(default_date=default_date, target_product_code=target_product_code)
+    if rules_df is None:
+        return default_df.assign(우선순위=4 if str(target_product_code).strip() else 1)
+
+    work = rules_df.copy()
+    for col in ["적용구분", "적용값", "인상기준일", "인상률(%)"]:
+        if col not in work.columns:
+            work[col] = default_df[col].iloc[0]
+
+    work["적용구분"] = work["적용구분"].fillna("전체").astype(str).str.strip()
+    work["적용값"] = work["적용값"].fillna("").astype(str).str.strip()
+    work["인상기준일"] = pd.to_datetime(work["인상기준일"], errors="coerce")
+    work["인상률(%)"] = pd.to_numeric(work["인상률(%)"], errors="coerce").fillna(0.0)
+
+    allowed_scope = ["품목코드", "점착제코드", "품목명키워드", "전체"]
+    work.loc[~work["적용구분"].isin(allowed_scope), "적용구분"] = "전체"
+    work = work[work["인상기준일"].notna()].copy()
+    if work.empty:
+        work = default_df.copy()
+        work["인상기준일"] = pd.to_datetime(work["인상기준일"], errors="coerce")
+
+    priority_map = {"품목코드": 4, "점착제코드": 3, "품목명키워드": 2, "전체": 1}
+    work["우선순위"] = work["적용구분"].map(priority_map).fillna(1).astype(int)
+    work = work.sort_values(["인상기준일", "우선순위", "적용값"], ascending=[True, False, True]).reset_index(drop=True)
+    return work[["적용구분", "적용값", "인상기준일", "인상률(%)", "우선순위"]]
+
+
+def quote_price_rule_mask(df, rule):
+    scope = str(rule.get("적용구분", "전체")).strip()
+    value = str(rule.get("적용값", "")).strip()
+    if scope == "품목코드":
+        return df.get("품목코드", pd.Series("", index=df.index)).astype(str).str.strip() == value
+    if scope == "점착제코드":
+        return df.get("점착제코드", pd.Series("", index=df.index)).astype(str).str.strip() == value
+    if scope == "품목명키워드":
+        if value == "":
+            return pd.Series(False, index=df.index)
+        return df.get("품목명(공식)", pd.Series("", index=df.index)).astype(str).str.contains(value, case=False, na=False, regex=False)
+    return pd.Series(True, index=df.index)
+
+
+def apply_quote_price_adjustments(work, rules_df, direct_compare_days=23, default_date=None, target_product_code=""):
+    if work is None or work.empty:
+        return work
+
+    df = work.copy()
+    df["최근날짜_dt"] = pd.to_datetime(df.get("최근날짜"), errors="coerce")
+    df["최근단가"] = pd.to_numeric(df.get("최근단가"), errors="coerce")
+    df["레퍼런스단가"] = df["최근단가"]
+    df["단가보정계수"] = 1.0
+    df["적용인상률(%)"] = 0.0
+    df["단가인상기준일"] = ""
+    df["인상반영내역"] = ""
+
+    rules = normalize_quote_price_rules(rules_df, default_date=default_date, target_product_code=target_product_code)
+    if rules.empty:
+        age = pd.to_numeric(df.get("최근단가경과일"), errors="coerce")
+        df["비교판정"] = np.where(age <= float(direct_compare_days), "최근단가 직접비교", "직접비교(인상률 미설정)")
+        return df
+
+    for event_date, event_rules in rules.groupby("인상기준일", sort=True):
+        event_ts = pd.Timestamp(event_date)
+        assigned_rate = pd.Series(np.nan, index=df.index, dtype=float)
+        assigned_desc = pd.Series("", index=df.index, dtype=object)
+
+        for _, rule in event_rules.sort_values("우선순위", ascending=False).iterrows():
+            scope_mask = quote_price_rule_mask(df, rule)
+            fill_mask = assigned_rate.isna() & scope_mask
+            rate_val = float(rule.get("인상률(%)", 0.0) or 0.0)
+            rule_value = str(rule.get("적용값", "")).strip()
+            rule_label = str(rule.get("적용구분", "전체")).strip()
+            rule_suffix = f"({rule_label}:{rule_value})" if rule_value else f"({rule_label})"
+            assigned_rate.loc[fill_mask] = rate_val
+            assigned_desc.loc[fill_mask] = f"{event_ts.strftime('%Y-%m-%d')} {rate_val:.2f}% {rule_suffix}"
+
+        apply_mask = (
+            df["최근단가"].notna() &
+            df["최근날짜_dt"].notna() &
+            (df["최근날짜_dt"] < event_ts) &
+            assigned_rate.notna()
+        )
+        if apply_mask.any():
+            factor = 1.0 + (assigned_rate.fillna(0.0) / 100.0)
+            df.loc[apply_mask, "단가보정계수"] = df.loc[apply_mask, "단가보정계수"] * factor.loc[apply_mask]
+            existing = df.loc[apply_mask, "인상반영내역"].fillna("").astype(str)
+            addition = assigned_desc.loc[apply_mask].fillna("").astype(str)
+            df.loc[apply_mask, "인상반영내역"] = np.where(
+                existing.str.strip() != "",
+                existing + " / " + addition,
+                addition,
+            )
+            df.loc[apply_mask, "단가인상기준일"] = event_ts.strftime("%Y-%m-%d")
+
+    df["레퍼런스단가"] = (df["최근단가"] * df["단가보정계수"]).round(3)
+    df["적용인상률(%)"] = ((df["단가보정계수"] - 1.0) * 100.0).round(2)
+
+    age = pd.to_numeric(df.get("최근단가경과일"), errors="coerce")
+    df["비교판정"] = np.where(
+        df["적용인상률(%)"] > 0,
+        "인상률 반영 레퍼런스",
+        np.where(age <= float(direct_compare_days), "최근단가 직접비교", "직접비교(인상률 미설정)")
+    )
+    return df
+
+
 def similarity_to_target(values, target):
     vals = pd.to_numeric(values, errors="coerce").fillna(0)
     target = float(target) if target is not None else 0.0
@@ -1910,6 +2051,9 @@ def summarize_quote_recommendation_reason(row):
         reasons.append("최근 단가 데이터 최신")
     if float(row.get("안정성점수", 0)) >= 70:
         reasons.append("월별 매출 변동 낮음")
+    applied_rate = float(pd.to_numeric(pd.Series([row.get("적용인상률(%)", 0)]), errors="coerce").fillna(0).iloc[0])
+    if applied_rate > 0:
+        reasons.append(f"인상률 {applied_rate:.2f}% 반영")
     price_judgement = str(row.get("단가판단", "")).strip()
     if price_judgement:
         reasons.append(price_judgement)
@@ -1917,7 +2061,7 @@ def summarize_quote_recommendation_reason(row):
 
 
 @st.cache_data(show_spinner=False)
-def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_code, expected_company_monthly_sales, expected_item_monthly_sales, expected_item_monthly_qty, top_n=12):
+def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_code, expected_company_monthly_sales, expected_item_monthly_sales, expected_item_monthly_qty, price_rule_df=None, direct_compare_days=23, top_n=12):
     empty_summary = pd.DataFrame()
     empty_reco = pd.DataFrame()
 
@@ -1938,10 +2082,19 @@ def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_co
         work["거래처총개월수"] = np.nan
         work["거래처총매출"] = np.nan
 
+    default_rule_date = pd.Timestamp("2026-04-15")
+    work = apply_quote_price_adjustments(
+        work,
+        rules_df=price_rule_df,
+        direct_compare_days=direct_compare_days,
+        default_date=default_rule_date,
+        target_product_code=target_product_code,
+    )
+
     num_cols = [
         "월평균_출고량", "월평균_매출", "총매출액", "매출CV", "매출기울기",
-        "최근단가", "최저단가", "최고단가", "최근단가경과일", "최근단가위치(%)",
-        "거래처월평균매출", "거래처총개월수", "거래처총매출", "개월수"
+        "최근단가", "레퍼런스단가", "최저단가", "최고단가", "최근단가경과일", "최근단가위치(%)",
+        "거래처월평균매출", "거래처총개월수", "거래처총매출", "개월수", "적용인상률(%)"
     ]
     for col in num_cols:
         if col in work.columns:
@@ -2006,7 +2159,7 @@ def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_co
 
     top_n = max(3, int(top_n))
     top_ref = work.head(min(top_n, len(work))).copy()
-    price_pool = pd.to_numeric(top_ref.get("최근단가", np.nan), errors="coerce").dropna()
+    price_pool = pd.to_numeric(top_ref.get("레퍼런스단가", top_ref.get("최근단가", np.nan)), errors="coerce").dropna()
     if len(price_pool) == 0:
         return empty_summary, work
 
@@ -2030,7 +2183,8 @@ def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_co
         "활용레퍼런스수": int(len(top_ref)),
         "전체후보수": int(len(work)),
         "상위레퍼런스최근단가중앙경과일": int(round(median_recent_age, 0)) if pd.notna(median_recent_age) else 0,
-        "추천기준": "거래처 규모 + 예상 품목 매출/수량 + 최근성 + 안정성 기반",
+        "직접비교경과일기준": int(direct_compare_days),
+        "추천기준": f"거래처 규모 + 예상 품목 매출/수량 + 최근성 + 안정성 + 단가인상 반영({int(direct_compare_days)}일 직접비교)",
     }])
 
     return summary, work
@@ -3442,26 +3596,35 @@ with tab3:
                 default_width_value = round(default_width_value if default_width_value > 0 else 1.0, 3)
                 default_qty_input = round((default_item_qty / default_width_value), 1) if default_width_value > 0 else round(default_item_qty, 1)
 
+                company_sales_key = f"quote_ref_expected_company_sales_text_{selected_quote_product}"
+                item_sales_key = f"quote_ref_expected_item_sales_text_{selected_quote_product}"
+                width_key = f"quote_ref_expected_item_width_text_{selected_quote_product}"
+                qty_key = f"quote_ref_expected_item_qty_text_{selected_quote_product}"
+
                 col_q1, col_q2, col_q3, col_q4 = st.columns(4)
-                company_sales_raw = col_q1.text_input(
+                company_sales_raw = formatted_numeric_text_input(
                     "신규 거래처 예상 월평균 매출액(원)",
-                    value=format_number_text(default_company_sales, 0),
-                    key="quote_ref_expected_company_sales_text"
+                    default_company_sales,
+                    key=company_sales_key,
+                    decimals=0,
                 )
-                item_sales_raw = col_q2.text_input(
+                item_sales_raw = formatted_numeric_text_input(
                     "해당 품목 예상 월매출액(원)",
-                    value=format_number_text(default_item_sales, 0),
-                    key="quote_ref_expected_item_sales_text"
+                    default_item_sales,
+                    key=item_sales_key,
+                    decimals=0,
                 )
-                width_raw = col_q3.text_input(
+                width_raw = formatted_numeric_text_input(
                     "해당 품목 예상 지폭",
-                    value=format_number_text(default_width_value, 3),
-                    key="quote_ref_expected_item_width_text"
+                    default_width_value,
+                    key=width_key,
+                    decimals=3,
                 )
-                qty_raw = col_q4.text_input(
+                qty_raw = formatted_numeric_text_input(
                     "해당 품목 예상 수량",
-                    value=format_number_text(default_qty_input, 1),
-                    key="quote_ref_expected_item_qty_text"
+                    default_qty_input,
+                    key=qty_key,
+                    decimals=1,
                 )
 
                 expected_company_monthly_sales = parse_numeric_text_input(company_sales_raw, default_company_sales)
@@ -3474,6 +3637,51 @@ with tab3:
                     f"계산된 해당 품목 예상 월수량(M2): {format_number_text(expected_item_monthly_qty, 1)} = 지폭 {format_number_text(expected_item_width, 3)} × 수량 {format_number_text(expected_item_qty_input, 1)}"
                 )
 
+                latest_quote_dt = pd.to_datetime(q_quote_scope.get("날짜"), errors="coerce").max() if isinstance(q_quote_scope, pd.DataFrame) and "날짜" in q_quote_scope.columns else pd.NaT
+                default_rule_date = pd.Timestamp("2026-04-15")
+                auto_compare_days = int(max(0, (latest_quote_dt - default_rule_date).days)) if pd.notna(latest_quote_dt) else 23
+                auto_compare_days = auto_compare_days if auto_compare_days > 0 else 23
+
+                st.markdown("#### 단가 인상 반영 설정")
+                st.caption("가장 유연한 방식은 인상 이벤트를 누적 관리하는 것입니다. 아래 표에서 품목/점착제/키워드별 인상 기준일과 인상률을 여러 줄로 등록할 수 있고, 최근단가가 해당 기준일 이전이면 레퍼런스단가에 자동 반영됩니다. 같은 날짜에 여러 규칙이 있으면 더 구체적인 규칙(품목코드 → 점착제코드 → 품목명키워드 → 전체)을 우선 적용합니다.")
+
+                compare_col1, compare_col2 = st.columns([1, 2])
+                direct_compare_days = compare_col1.number_input(
+                    "최근단가 직접 비교 가능 경과일",
+                    min_value=0,
+                    value=int(auto_compare_days),
+                    step=1,
+                    key=f"quote_ref_direct_compare_days_{selected_quote_product}",
+                )
+                if pd.notna(latest_quote_dt):
+                    compare_col2.caption(
+                        f"현재 선택 데이터 최신일자: {latest_quote_dt.strftime('%Y-%m-%d')} / 기본 인상 기준일: {default_rule_date.strftime('%Y-%m-%d')} / 자동 계산 기본값: {int(auto_compare_days)}일"
+                    )
+                else:
+                    compare_col2.caption(
+                        f"기본 인상 기준일: {default_rule_date.strftime('%Y-%m-%d')} / 직접 비교 가능 경과일 기본값: {int(auto_compare_days)}일"
+                    )
+
+                rule_default_df = build_default_quote_price_rules(default_date=default_rule_date, target_product_code=selected_quote_product)
+                price_rule_df = st.data_editor(
+                    rule_default_df,
+                    key=f"quote_ref_price_rule_editor_{selected_quote_product}",
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="dynamic",
+                    column_config={
+                        "적용구분": st.column_config.SelectboxColumn(
+                            "적용구분",
+                            options=["품목코드", "점착제코드", "품목명키워드", "전체"],
+                            width="small",
+                        ),
+                        "적용값": st.column_config.TextColumn("적용값", width="medium"),
+                        "인상기준일": st.column_config.DateColumn("인상기준일", format="YYYY-MM-DD", width="small"),
+                        "인상률(%)": st.column_config.NumberColumn("인상률(%)", format="%.2f", width="small"),
+                    },
+                    column_order=["적용구분", "적용값", "인상기준일", "인상률(%)"],
+                )
+
                 reco_summary, reco_detail = build_new_customer_quote_recommendation(
                     q_quote_scope,
                     ref_detail,
@@ -3481,6 +3689,8 @@ with tab3:
                     float(expected_company_monthly_sales),
                     float(expected_item_monthly_sales),
                     float(expected_item_monthly_qty),
+                    price_rule_df=price_rule_df,
+                    direct_compare_days=int(direct_compare_days),
                 )
 
                 if reco_summary.empty or reco_detail.empty:
@@ -3490,7 +3700,7 @@ with tab3:
                     summary_cols = [
                         "품목코드", "입력_거래처월평균매출", "입력_품목예상월매출", "입력_품목예상월수량",
                         "추천하한단가", "추천기준단가", "추천상한단가", "활용레퍼런스수", "전체후보수",
-                        "상위레퍼런스최근단가중앙경과일", "추천기준"
+                        "상위레퍼런스최근단가중앙경과일", "직접비교경과일기준", "추천기준"
                     ]
                     clean_and_safe_display(
                         reco_summary[summary_cols],
@@ -3508,22 +3718,23 @@ with tab3:
                             "활용레퍼런스수": 80,
                             "전체후보수": 70,
                             "상위레퍼런스최근단가중앙경과일": 140,
-                            "추천기준": 250,
+                            "직접비교경과일기준": 110,
+                            "추천기준": 300,
                         },
                     )
 
                     st.markdown("#### 유사 레퍼런스 TOP")
                     reco_cols = [
                         "추천순위", "적합도등급", "품목코드", "거래처", "거래처월평균매출", "월평균_매출", "월평균_출고량",
-                        "최근날짜", "최근단가", "최근단가경과일", "단가판단", "견적추천점수",
-                        "거래처규모적합도", "거래처규모우대점수", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "안정성점수", "추천사유"
+                        "최근날짜", "단가인상기준일", "적용인상률(%)", "레퍼런스단가", "최근단가", "최근단가경과일", "비교판정", "단가판단", "견적추천점수",
+                        "거래처규모적합도", "거래처규모우대점수", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "안정성점수", "인상반영내역", "추천사유"
                     ]
                     reco_cols = [c for c in reco_cols if c in reco_detail.columns]
                     reco_top = reco_detail.head(12).copy()
                     clean_and_safe_display(
                         reco_top[reco_cols],
                         pinned_cols=["추천순위", "품목코드", "거래처"],
-                        text_cols=["적합도등급", "품목코드", "거래처", "최근날짜", "단가판단", "추천사유"],
+                        text_cols=["적합도등급", "품목코드", "거래처", "최근날짜", "단가인상기준일", "비교판정", "단가판단", "인상반영내역", "추천사유"],
                         height=calc_table_height(reco_top, min_rows=5, max_rows=12),
                         column_width_overrides={
                             "추천순위": 60,
@@ -3534,8 +3745,12 @@ with tab3:
                             "월평균_매출": 105,
                             "월평균_출고량": 95,
                             "최근날짜": 95,
+                            "단가인상기준일": 105,
+                            "적용인상률(%)": 100,
+                            "레퍼런스단가": 95,
                             "최근단가": 85,
                             "최근단가경과일": 95,
+                            "비교판정": 125,
                             "단가판단": 150,
                             "견적추천점수": 95,
                             "거래처규모적합도": 105,
@@ -3544,6 +3759,7 @@ with tab3:
                             "예상품목수량적합도": 120,
                             "최근성점수": 85,
                             "안정성점수": 85,
+                            "인상반영내역": 220,
                             "추천사유": 320,
                         },
                     )
