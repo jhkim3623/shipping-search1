@@ -299,6 +299,28 @@ def join_unique_width_text(series):
     return ", ".join(vals)
 
 
+def parse_numeric_text_input(value, default=0.0):
+    if value is None:
+        return float(default)
+    try:
+        cleaned = str(value).strip().replace(',', '')
+        if cleaned == '':
+            return float(default)
+        return float(cleaned)
+    except Exception:
+        return float(default)
+
+
+def format_number_text(value, decimals=0):
+    try:
+        num = float(value)
+    except Exception:
+        num = 0.0
+    if decimals <= 0:
+        return f"{int(round(num, 0)):,}"
+    return f"{num:,.{int(decimals)}f}"
+
+
 def build_filtered_recent_snapshot(df, group_cols, include_width_history=False, width_group_cols=None):
     base_cols = list(group_cols or [])
     extra_cols = ["최근날짜", "최근단가"]
@@ -1939,6 +1961,7 @@ def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_co
     work["거래처규모적합도"] = similarity_to_target(work.get("거래처월평균매출", 0), target_company)
     work["예상품목매출적합도"] = similarity_to_target(work.get("월평균_매출", 0), target_item_sales)
     work["예상품목수량적합도"] = similarity_to_target(work.get("월평균_출고량", 0), target_item_qty)
+    work["거래처규모우대점수"] = scale_to_100(work.get("거래처월평균매출", 0)).fillna(50.0)
 
     age = pd.to_numeric(work.get("최근단가경과일", np.nan), errors="coerce")
     work["최근성점수"] = np.select(
@@ -1959,19 +1982,20 @@ def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_co
     work["활동성점수"] = activity.round(1)
 
     work["견적추천점수"] = (
-        work["거래처규모적합도"] * 0.25 +
-        work["예상품목매출적합도"] * 0.25 +
-        work["예상품목수량적합도"] * 0.20 +
-        work["최근성점수"] * 0.12 +
-        work["안정성점수"] * 0.08 +
-        work["가격레퍼런스점수"] * 0.05 +
-        work["활동성점수"] * 0.05
+        work["거래처규모적합도"] * 0.32 +
+        work["거래처규모우대점수"] * 0.10 +
+        work["예상품목매출적합도"] * 0.22 +
+        work["예상품목수량적합도"] * 0.16 +
+        work["최근성점수"] * 0.10 +
+        work["안정성점수"] * 0.05 +
+        work["가격레퍼런스점수"] * 0.03 +
+        work["활동성점수"] * 0.02
     ).round(1)
 
     work["추천사유"] = work.apply(summarize_quote_recommendation_reason, axis=1)
     work = work.sort_values(
-        ["견적추천점수", "거래처규모적합도", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "총매출액"],
-        ascending=[False, False, False, False, False, False]
+        ["견적추천점수", "거래처규모적합도", "거래처규모우대점수", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "총매출액"],
+        ascending=[False, False, False, False, False, False, False]
     ).reset_index(drop=True)
     work["추천순위"] = range(1, len(work) + 1)
     work["적합도등급"] = pd.cut(
@@ -3088,22 +3112,24 @@ if date_min is not None and pd.notna(date_min) and date_max is not None and pd.n
 st.sidebar.markdown("---")
 st.sidebar.caption("💡 견적 레퍼런스: 품목코드·점착제코드·기간 필터 위주로 사용하세요.")
 
-q = rec.copy()
+q_quote_scope = rec.copy()
 if dept_col and sel_dept:
-    q = q[q[dept_col].astype(str).str.strip().isin(sel_dept)]
+    q_quote_scope = q_quote_scope[q_quote_scope[dept_col].astype(str).str.strip().isin(sel_dept)]
 if manager_col and sel_manager:
-    q = q[q[manager_col].astype(str).str.strip().isin(sel_manager)]
-if sel_cust and "거래처" in q.columns:
-    q = q[q["거래처"].astype(str).isin(sel_cust)]
+    q_quote_scope = q_quote_scope[q_quote_scope[manager_col].astype(str).str.strip().isin(sel_manager)]
+if sel_cust and "거래처" in q_quote_scope.columns:
+    q_quote_scope = q_quote_scope[q_quote_scope["거래처"].astype(str).isin(sel_cust)]
+if sdate is not None and edate is not None and "날짜" in q_quote_scope.columns:
+    q_quote_scope = q_quote_scope[
+        (q_quote_scope["날짜"].dt.date >= sdate) &
+        (q_quote_scope["날짜"].dt.date <= edate)
+    ]
+
+q = q_quote_scope.copy()
 if sel_prod and "품목코드" in q.columns:
     q = q[q["품목코드"].astype(str).isin(sel_prod)]
 if sel_adh and "점착제코드" in q.columns:
     q = q[q["점착제코드"].astype(str).isin(sel_adh)]
-if sdate is not None and edate is not None and "날짜" in q.columns:
-    q = q[
-        (q["날짜"].dt.date >= sdate) &
-        (q["날짜"].dt.date <= edate)
-    ]
 
 tab1, tab2, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs([
     "거래처별 검색",
@@ -3386,8 +3412,9 @@ with tab3:
                         key="quote_ref_target_product"
                     )
 
-                customer_profile_df = build_customer_monthly_scale_profile(q)
+                customer_profile_df = build_customer_monthly_scale_profile(q_quote_scope)
                 base_item_detail = ref_detail[ref_detail["품목코드"].astype(str) == str(selected_quote_product)].copy()
+                base_item_scope = q[q["품목코드"].astype(str) == str(selected_quote_product)].copy() if "품목코드" in q.columns else pd.DataFrame()
                 if not customer_profile_df.empty and not base_item_detail.empty:
                     base_item_detail = base_item_detail.merge(customer_profile_df, on="거래처", how="left")
 
@@ -3402,31 +3429,53 @@ with tab3:
                 default_item_sales = int(round(_safe_median(base_item_detail.get("월평균_매출", pd.Series(dtype=float)), 0), 0)) if not base_item_detail.empty else 0
                 default_item_qty = round(_safe_median(base_item_detail.get("월평균_출고량", pd.Series(dtype=float)), 0), 1) if not base_item_detail.empty else 0.0
 
-                col_q1, col_q2, col_q3 = st.columns(3)
-                expected_company_monthly_sales = col_q1.number_input(
+                if not base_item_scope.empty and "가로폭(mm)" in base_item_scope.columns:
+                    width_series = pd.to_numeric(base_item_scope["가로폭(mm)"], errors="coerce")
+                    width_series = width_series[width_series > 0]
+                    if len(width_series) > 0:
+                        median_width = float(np.nanmedian(width_series))
+                        default_width_value = (median_width / 1000.0) if median_width > 20 else median_width
+                    else:
+                        default_width_value = 1.0
+                else:
+                    default_width_value = 1.0
+                default_width_value = round(default_width_value if default_width_value > 0 else 1.0, 3)
+                default_qty_input = round((default_item_qty / default_width_value), 1) if default_width_value > 0 else round(default_item_qty, 1)
+
+                col_q1, col_q2, col_q3, col_q4 = st.columns(4)
+                company_sales_raw = col_q1.text_input(
                     "신규 거래처 예상 월평균 매출액(원)",
-                    min_value=0,
-                    value=max(0, default_company_sales),
-                    step=100000,
-                    key="quote_ref_expected_company_sales"
+                    value=format_number_text(default_company_sales, 0),
+                    key="quote_ref_expected_company_sales_text"
                 )
-                expected_item_monthly_sales = col_q2.number_input(
+                item_sales_raw = col_q2.text_input(
                     "해당 품목 예상 월매출액(원)",
-                    min_value=0,
-                    value=max(0, default_item_sales),
-                    step=100000,
-                    key="quote_ref_expected_item_sales"
+                    value=format_number_text(default_item_sales, 0),
+                    key="quote_ref_expected_item_sales_text"
                 )
-                expected_item_monthly_qty = col_q3.number_input(
-                    "해당 품목 예상 월수량(M2)",
-                    min_value=0.0,
-                    value=max(0.0, float(default_item_qty)),
-                    step=100.0,
-                    key="quote_ref_expected_item_qty"
+                width_raw = col_q3.text_input(
+                    "해당 품목 예상 지폭",
+                    value=format_number_text(default_width_value, 3),
+                    key="quote_ref_expected_item_width_text"
+                )
+                qty_raw = col_q4.text_input(
+                    "해당 품목 예상 수량",
+                    value=format_number_text(default_qty_input, 1),
+                    key="quote_ref_expected_item_qty_text"
+                )
+
+                expected_company_monthly_sales = parse_numeric_text_input(company_sales_raw, default_company_sales)
+                expected_item_monthly_sales = parse_numeric_text_input(item_sales_raw, default_item_sales)
+                expected_item_width = parse_numeric_text_input(width_raw, default_width_value)
+                expected_item_qty_input = parse_numeric_text_input(qty_raw, default_qty_input)
+                expected_item_monthly_qty = max(0.0, float(expected_item_width) * float(expected_item_qty_input))
+
+                st.caption(
+                    f"계산된 해당 품목 예상 월수량(M2): {format_number_text(expected_item_monthly_qty, 1)} = 지폭 {format_number_text(expected_item_width, 3)} × 수량 {format_number_text(expected_item_qty_input, 1)}"
                 )
 
                 reco_summary, reco_detail = build_new_customer_quote_recommendation(
-                    q,
+                    q_quote_scope,
                     ref_detail,
                     selected_quote_product,
                     float(expected_company_monthly_sales),
@@ -3467,7 +3516,7 @@ with tab3:
                     reco_cols = [
                         "추천순위", "적합도등급", "품목코드", "거래처", "거래처월평균매출", "월평균_매출", "월평균_출고량",
                         "최근날짜", "최근단가", "최근단가경과일", "단가판단", "견적추천점수",
-                        "거래처규모적합도", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "안정성점수", "추천사유"
+                        "거래처규모적합도", "거래처규모우대점수", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "안정성점수", "추천사유"
                     ]
                     reco_cols = [c for c in reco_cols if c in reco_detail.columns]
                     reco_top = reco_detail.head(12).copy()
@@ -3490,6 +3539,7 @@ with tab3:
                             "단가판단": 150,
                             "견적추천점수": 95,
                             "거래처규모적합도": 105,
+                            "거래처규모우대점수": 105,
                             "예상품목매출적합도": 120,
                             "예상품목수량적합도": 120,
                             "최근성점수": 85,
