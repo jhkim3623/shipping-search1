@@ -1673,6 +1673,49 @@ def build_quote_reference(q_ref):
         on=["품목코드", "거래처"], how="left"
     )
 
+    ref_detail["최근날짜"] = pd.to_datetime(ref_detail["최근날짜"], errors="coerce")
+    latest_overall_date = pd.to_datetime(df["날짜"], errors="coerce").max()
+
+    if pd.notna(latest_overall_date):
+        ref_detail["최근단가경과일"] = (latest_overall_date - ref_detail["최근날짜"]).dt.days
+    else:
+        ref_detail["최근단가경과일"] = np.nan
+
+    recent_price = pd.to_numeric(ref_detail["최근단가"], errors="coerce")
+    min_price = pd.to_numeric(ref_detail["최저단가"], errors="coerce")
+    max_price = pd.to_numeric(ref_detail["최고단가"], errors="coerce")
+    price_span = max_price - min_price
+
+    ref_detail["최근단가위치(%)"] = np.nan
+    valid_recent_mask = recent_price.notna()
+    ref_detail.loc[valid_recent_mask, "최근단가위치(%)"] = 50.0
+    valid_span_mask = valid_recent_mask & (price_span > 0)
+    ref_detail.loc[valid_span_mask, "최근단가위치(%)"] = (
+        ((recent_price[valid_span_mask] - min_price[valid_span_mask]) / price_span[valid_span_mask]) * 100
+    ).clip(0, 100)
+
+    def infer_quote_price_context(row):
+        age = row.get("최근단가경과일")
+        pos = row.get("최근단가위치(%)")
+        notes = []
+        if pd.notna(age):
+            age = float(age)
+            if age <= 31:
+                notes.append("최신단가")
+            elif age >= 90:
+                notes.append("단가일자 확인필요")
+        if pd.notna(pos):
+            pos = float(pos)
+            if pos >= 80:
+                notes.append("최근단가 고점권")
+            elif pos <= 20:
+                notes.append("최근단가 저점권")
+            else:
+                notes.append("최근단가 중간권")
+        return " / ".join(notes) if notes else "판단보류"
+
+    ref_detail["단가판단"] = ref_detail.apply(infer_quote_price_context, axis=1)
+
     prod_bench = ref_detail.groupby("품목코드").agg(
         qty_p70=("월평균_출고량", lambda s: np.nanpercentile(s, 70) if len(s.dropna()) > 0 else 0),
         sales_p70=("월평균_매출", lambda s: np.nanpercentile(s, 70) if len(s.dropna()) > 0 else 0),
@@ -1735,6 +1778,8 @@ def build_quote_reference(q_ref):
         .reset_index(drop=True)
     )
     representative["최근날짜"] = pd.to_datetime(representative["최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "최근단가경과일" in representative.columns:
+        representative["최근단가경과일"] = pd.to_numeric(representative["최근단가경과일"], errors="coerce").round(0)
 
     special_rows = []
 
@@ -1770,6 +1815,9 @@ def build_quote_reference(q_ref):
             ["품목코드", "대표구분", "총매출액", "거래처"],
             ascending=[True, True, False, True]
         ).reset_index(drop=True)
+        special_reference["최근날짜"] = pd.to_datetime(special_reference["최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d")
+        if "최근단가경과일" in special_reference.columns:
+            special_reference["최근단가경과일"] = pd.to_numeric(special_reference["최근단가경과일"], errors="coerce").round(0)
 
     return overview, representative, special_reference
 
@@ -1803,8 +1851,11 @@ def draw_quote_reference_chart(special_df):
                 f"품목코드: {item}<br>"
                 "거래처: %{x}<br>"
                 "최근단가: %{y:,.0f}원/M2<br>"
-                "구분: %{text}<extra></extra>"
-            )
+                + ("최근날짜: %{customdata[0]}<br>" if "최근날짜" in sub.columns else "")
+                + ("단가판단: %{customdata[1]}<br>" if "단가판단" in sub.columns else "")
+                + "구분: %{text}<extra></extra>"
+            ),
+            customdata=sub[[c for c in ["최근날짜", "단가판단"] if c in sub.columns]].to_numpy() if any(c in sub.columns for c in ["최근날짜", "단가판단"]) else None
         ))
 
     fig.update_layout(
@@ -3049,27 +3100,30 @@ with tab3:
         )
 
         st.markdown("### 2) 업체 성향 AI 분석 기반 대표 레퍼런스")
+        st.caption("최근단가의 일자와 단가판단을 함께 보여 최근 단가 인상 전후 여부를 레퍼런스 관점에서 확인할 수 있도록 보강했습니다.")
         rep_cols = [
             "품목코드", "거래처", "업체성향", "AI분석",
-            "최근단가", "최저단가", "최고단가", "최근날짜",
-            "월평균_출고량", "월평균_매출", "최근추세", "총매출액"
+            "최근날짜", "최근단가", "최근단가경과일", "단가판단",
+            "최저단가", "최고단가", "월평균_출고량", "월평균_매출", "최근추세", "총매출액"
         ]
         rep_cols = [c for c in rep_cols if c in rep_ref.columns]
 
         clean_and_safe_display(
             rep_ref[rep_cols] if rep_cols else pd.DataFrame(),
             pinned_cols=["품목코드", "거래처"],
-            text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세"],
+            text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세", "단가판단"],
             height=None,
             column_width_overrides={
                 "품목코드": 145,
                 "거래처": 145,
                 "업체성향": 130,
                 "AI분석": 360,
+                "최근날짜": 95,
                 "최근단가": 80,
+                "최근단가경과일": 95,
+                "단가판단": 160,
                 "최저단가": 80,
                 "최고단가": 80,
-                "최근날짜": 95,
                 "월평균_출고량": 95,
                 "월평균_매출": 95,
                 "최근추세": 85,
@@ -3079,8 +3133,8 @@ with tab3:
 
         st.markdown("### 3) 대표 업체 레퍼런스 확장")
         special_cols = [
-            "대표구분", "품목코드", "거래처", "업체성향", "최근단가",
-            "최저단가", "최고단가", "월평균_출고량", "월평균_매출",
+            "대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근단가",
+            "최근단가경과일", "단가판단", "최저단가", "최고단가", "월평균_출고량", "월평균_매출",
             "최근추세", "총매출액", "AI분석"
         ]
         special_cols = [c for c in special_cols if c in special_ref.columns]
@@ -3088,14 +3142,17 @@ with tab3:
         clean_and_safe_display(
             special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols),
             pinned_cols=["대표구분", "품목코드", "거래처"],
-            text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근추세", "AI분석"],
+            text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근추세", "AI분석", "단가판단"],
             height=None,
             column_width_overrides={
                 "대표구분": 150,
                 "품목코드": 145,
                 "거래처": 145,
                 "업체성향": 130,
+                "최근날짜": 95,
                 "최근단가": 80,
+                "최근단가경과일": 95,
+                "단가판단": 160,
                 "최저단가": 80,
                 "최고단가": 80,
                 "월평균_출고량": 95,
