@@ -1979,8 +1979,7 @@ def apply_quote_price_adjustments(work, rules_df, direct_compare_days=23, defaul
 
     rules = normalize_quote_price_rules(rules_df, default_date=default_date, target_product_code=target_product_code)
     if rules.empty:
-        age = pd.to_numeric(df.get("최근단가경과일"), errors="coerce")
-        df["비교판정"] = np.where(age <= float(direct_compare_days), "최근단가 직접비교", "직접비교(인상률 미설정)")
+        df["비교판정"] = "인상률 미설정(최근단가 그대로 사용)"
         return df
 
     for event_date, event_rules in rules.groupby("인상기준일", sort=True):
@@ -2019,11 +2018,10 @@ def apply_quote_price_adjustments(work, rules_df, direct_compare_days=23, defaul
     df["레퍼런스단가"] = (df["최근단가"] * df["단가보정계수"]).round(3)
     df["적용인상률(%)"] = ((df["단가보정계수"] - 1.0) * 100.0).round(2)
 
-    age = pd.to_numeric(df.get("최근단가경과일"), errors="coerce")
     df["비교판정"] = np.where(
         df["적용인상률(%)"] > 0,
         "인상률 반영 레퍼런스",
-        np.where(age <= float(direct_compare_days), "최근단가 직접비교", "직접비교(인상률 미설정)")
+        "최근단가 그대로 사용"
     )
     return df
 
@@ -2183,8 +2181,7 @@ def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_co
         "활용레퍼런스수": int(len(top_ref)),
         "전체후보수": int(len(work)),
         "상위레퍼런스최근단가중앙경과일": int(round(median_recent_age, 0)) if pd.notna(median_recent_age) else 0,
-        "직접비교경과일기준": int(direct_compare_days),
-        "추천기준": f"거래처 규모 + 예상 품목 매출/수량 + 최근성 + 안정성 + 단가인상 반영({int(direct_compare_days)}일 직접비교)",
+        "추천기준": "거래처 규모 + 예상 품목 매출/수량 + 최근성 + 안정성 + 단가인상기준일 반영",
     }])
 
     return summary, work
@@ -3602,30 +3599,34 @@ with tab3:
                 qty_key = f"quote_ref_expected_item_qty_text_{selected_quote_product}"
 
                 col_q1, col_q2, col_q3, col_q4 = st.columns(4)
-                company_sales_raw = formatted_numeric_text_input(
-                    "신규 거래처 예상 월평균 매출액(원)",
-                    default_company_sales,
-                    key=company_sales_key,
-                    decimals=0,
-                )
-                item_sales_raw = formatted_numeric_text_input(
-                    "해당 품목 예상 월매출액(원)",
-                    default_item_sales,
-                    key=item_sales_key,
-                    decimals=0,
-                )
-                width_raw = formatted_numeric_text_input(
-                    "해당 품목 예상 지폭",
-                    default_width_value,
-                    key=width_key,
-                    decimals=3,
-                )
-                qty_raw = formatted_numeric_text_input(
-                    "해당 품목 예상 수량",
-                    default_qty_input,
-                    key=qty_key,
-                    decimals=1,
-                )
+                with col_q1:
+                    company_sales_raw = formatted_numeric_text_input(
+                        "신규 거래처 예상 월평균 매출액(원)",
+                        default_company_sales,
+                        key=company_sales_key,
+                        decimals=0,
+                    )
+                with col_q2:
+                    item_sales_raw = formatted_numeric_text_input(
+                        "해당 품목 예상 월매출액(원)",
+                        default_item_sales,
+                        key=item_sales_key,
+                        decimals=0,
+                    )
+                with col_q3:
+                    width_raw = formatted_numeric_text_input(
+                        "해당 품목 예상 지폭",
+                        default_width_value,
+                        key=width_key,
+                        decimals=3,
+                    )
+                with col_q4:
+                    qty_raw = formatted_numeric_text_input(
+                        "해당 품목 예상 수량",
+                        default_qty_input,
+                        key=qty_key,
+                        decimals=1,
+                    )
 
                 expected_company_monthly_sales = parse_numeric_text_input(company_sales_raw, default_company_sales)
                 expected_item_monthly_sales = parse_numeric_text_input(item_sales_raw, default_item_sales)
@@ -3643,28 +3644,30 @@ with tab3:
                 auto_compare_days = auto_compare_days if auto_compare_days > 0 else 23
 
                 st.markdown("#### 단가 인상 반영 설정")
-                st.caption("가장 유연한 방식은 인상 이벤트를 누적 관리하는 것입니다. 아래 표에서 품목/점착제/키워드별 인상 기준일과 인상률을 여러 줄로 등록할 수 있고, 최근단가가 해당 기준일 이전이면 레퍼런스단가에 자동 반영됩니다. 같은 날짜에 여러 규칙이 있으면 더 구체적인 규칙(품목코드 → 점착제코드 → 품목명키워드 → 전체)을 우선 적용합니다.")
+                st.caption("가장 유연한 방식은 인상 이벤트를 누적 관리하는 것입니다. 아래 표에서 품목/점착제/키워드별 인상 기준일과 인상률을 여러 줄로 등록할 수 있고, 최근단가가 해당 기준일 이전이면 레퍼런스단가에 자동 반영됩니다. 같은 날짜에 여러 규칙이 있으면 더 구체적인 규칙(품목코드 → 점착제코드 → 품목명키워드 → 전체)을 우선 적용합니다. 날짜는 'YYYY-MM-DD' 형식으로 입력해 주세요 (예: 2026-04-30).")
 
-                compare_col1, compare_col2 = st.columns([1, 2])
-                direct_compare_days = compare_col1.number_input(
-                    "최근단가 직접 비교 가능 경과일",
-                    min_value=0,
-                    value=int(auto_compare_days),
-                    step=1,
-                    key=f"quote_ref_direct_compare_days_{selected_quote_product}",
-                )
                 if pd.notna(latest_quote_dt):
-                    compare_col2.caption(
-                        f"현재 선택 데이터 최신일자: {latest_quote_dt.strftime('%Y-%m-%d')} / 기본 인상 기준일: {default_rule_date.strftime('%Y-%m-%d')} / 자동 계산 기본값: {int(auto_compare_days)}일"
+                    st.caption(
+                        f"현재 선택 데이터 최신일자: {latest_quote_dt.strftime('%Y-%m-%d')} / 기본 인상 기준일: {default_rule_date.strftime('%Y-%m-%d')}"
                     )
                 else:
-                    compare_col2.caption(
-                        f"기본 인상 기준일: {default_rule_date.strftime('%Y-%m-%d')} / 직접 비교 가능 경과일 기본값: {int(auto_compare_days)}일"
+                    st.caption(
+                        f"기본 인상 기준일: {default_rule_date.strftime('%Y-%m-%d')}"
                     )
 
+                # 인상기준일 직접 비교 경과일은 인상기준일 기반 계산으로 대체 (위젯 삭제)
+                direct_compare_days = 0
+
                 rule_default_df = build_default_quote_price_rules(default_date=default_rule_date, target_product_code=selected_quote_product)
+                # 인상기준일을 텍스트(YYYY-MM-DD)로 보여주기 위한 사전 변환
+                rule_default_display = rule_default_df.copy()
+                if "인상기준일" in rule_default_display.columns:
+                    rule_default_display["인상기준일"] = pd.to_datetime(
+                        rule_default_display["인상기준일"], errors="coerce"
+                    ).dt.strftime("%Y-%m-%d").fillna("")
+
                 price_rule_df = st.data_editor(
-                    rule_default_df,
+                    rule_default_display,
                     key=f"quote_ref_price_rule_editor_{selected_quote_product}",
                     use_container_width=True,
                     hide_index=True,
@@ -3676,7 +3679,11 @@ with tab3:
                             width="small",
                         ),
                         "적용값": st.column_config.TextColumn("적용값", width="medium"),
-                        "인상기준일": st.column_config.DateColumn("인상기준일", format="YYYY-MM-DD", width="small"),
+                        "인상기준일": st.column_config.TextColumn(
+                            "인상기준일",
+                            help="YYYY-MM-DD 형식으로 입력 (예: 2026-04-30)",
+                            width="small",
+                        ),
                         "인상률(%)": st.column_config.NumberColumn("인상률(%)", format="%.2f", width="small"),
                     },
                     column_order=["적용구분", "적용값", "인상기준일", "인상률(%)"],
@@ -3700,7 +3707,7 @@ with tab3:
                     summary_cols = [
                         "품목코드", "입력_거래처월평균매출", "입력_품목예상월매출", "입력_품목예상월수량",
                         "추천하한단가", "추천기준단가", "추천상한단가", "활용레퍼런스수", "전체후보수",
-                        "상위레퍼런스최근단가중앙경과일", "직접비교경과일기준", "추천기준"
+                        "상위레퍼런스최근단가중앙경과일", "추천기준"
                     ]
                     clean_and_safe_display(
                         reco_summary[summary_cols],
@@ -3718,7 +3725,6 @@ with tab3:
                             "활용레퍼런스수": 80,
                             "전체후보수": 70,
                             "상위레퍼런스최근단가중앙경과일": 140,
-                            "직접비교경과일기준": 110,
                             "추천기준": 300,
                         },
                     )
