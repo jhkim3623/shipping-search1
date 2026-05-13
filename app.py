@@ -3659,12 +3659,13 @@ with tab3:
                 direct_compare_days = 0
 
                 rule_default_df = build_default_quote_price_rules(default_date=default_rule_date, target_product_code=selected_quote_product)
-                # 인상기준일을 텍스트(YYYY-MM-DD)로 보여주기 위한 사전 변환
+                # 인상기준일을 datetime.date 객체로 변환 → DateColumn 캘린더 위젯 + YYYY/MM/DD 자동 서식화 지원
                 rule_default_display = rule_default_df.copy()
                 if "인상기준일" in rule_default_display.columns:
-                    rule_default_display["인상기준일"] = pd.to_datetime(
-                        rule_default_display["인상기준일"], errors="coerce"
-                    ).dt.strftime("%Y-%m-%d").fillna("")
+                    parsed_dates = pd.to_datetime(rule_default_display["인상기준일"], errors="coerce")
+                    rule_default_display["인상기준일"] = parsed_dates.apply(
+                        lambda x: x.date() if pd.notna(x) else None
+                    )
 
                 price_rule_df = st.data_editor(
                     rule_default_display,
@@ -3679,14 +3680,27 @@ with tab3:
                             width="small",
                         ),
                         "적용값": st.column_config.TextColumn("적용값", width="medium"),
-                        "인상기준일": st.column_config.TextColumn(
+                        "인상기준일": st.column_config.DateColumn(
                             "인상기준일",
-                            help="YYYY-MM-DD 형식으로 입력 (예: 2026-04-30)",
+                            format="YYYY/MM/DD",
+                            help="캘린더에서 선택하거나 8자리 숫자로 입력(예: 20260501 → 2026/05/01)",
                             width="small",
                         ),
                         "인상률(%)": st.column_config.NumberColumn("인상률(%)", format="%.2f", width="small"),
                     },
                     column_order=["적용구분", "적용값", "인상기준일", "인상률(%)"],
+                )
+
+                # 활용 레퍼런스 수 (Top N) 슬라이더 - 품목별 별도 저장
+                top_n_key = f"quote_ref_top_n_{selected_quote_product}"
+                top_n_value = st.slider(
+                    "활용 레퍼런스 수 (Top N)",
+                    min_value=3,
+                    max_value=20,
+                    value=12,
+                    step=1,
+                    key=top_n_key,
+                    help="추천 기준단가 산정에 활용할 상위 유사 레퍼런스 개수. 적을수록 유사도 높은 거래처만 활용, 많을수록 분위수 안정성 향상."
                 )
 
                 reco_summary, reco_detail = build_new_customer_quote_recommendation(
@@ -3698,6 +3712,7 @@ with tab3:
                     float(expected_item_monthly_qty),
                     price_rule_df=price_rule_df,
                     direct_compare_days=int(direct_compare_days),
+                    top_n=int(top_n_value),
                 )
 
                 if reco_summary.empty or reco_detail.empty:
@@ -3736,12 +3751,12 @@ with tab3:
                         "거래처규모적합도", "거래처규모우대점수", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "안정성점수", "인상반영내역", "추천사유"
                     ]
                     reco_cols = [c for c in reco_cols if c in reco_detail.columns]
-                    reco_top = reco_detail.head(12).copy()
+                    reco_top = reco_detail.head(int(top_n_value)).copy()
                     clean_and_safe_display(
                         reco_top[reco_cols],
                         pinned_cols=["추천순위", "품목코드", "거래처"],
                         text_cols=["적합도등급", "품목코드", "거래처", "최근날짜", "단가인상기준일", "비교판정", "단가판단", "인상반영내역", "추천사유"],
-                        height=calc_table_height(reco_top, min_rows=5, max_rows=12),
+                        height=calc_table_height(reco_top, min_rows=5, max_rows=int(top_n_value)),
                         column_width_overrides={
                             "추천순위": 60,
                             "적합도등급": 70,
