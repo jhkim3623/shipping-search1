@@ -1566,12 +1566,12 @@ def build_growth_priority_results(monthly_sales, detail_df, all_months, selected
 @st.cache_data(show_spinner=False)
 def build_quote_reference(q_ref):
     if q_ref is None or q_ref.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     df = q_ref.copy()
     required_cols = {"날짜", "품목코드", "거래처", "수량(M2)", "금액(원)", "단가(원/M2)"}
     if not required_cols.issubset(set(df.columns)):
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     if "품목명(공식)" not in df.columns:
         df["품목명(공식)"] = ""
@@ -1610,6 +1610,12 @@ def build_quote_reference(q_ref):
         .agg(월출고량=("수량(M2)", "sum"), 월매출=("금액(원)", "sum"))
         .reset_index()
         .sort_values(["품목코드", "거래처", "월"])
+    )
+
+    item_meta = (
+        df.sort_values("날짜")
+        .groupby(["품목코드", "거래처"], as_index=False)
+        .tail(1)[["품목코드", "거래처", "품목명(공식)", "점착제코드", "점착제명"]]
     )
 
     recent_unit = (
@@ -1665,8 +1671,9 @@ def build_quote_reference(q_ref):
 
     ref_detail = pd.DataFrame(rows)
     if ref_detail.empty:
-        return overview, pd.DataFrame(), pd.DataFrame()
+        return overview, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+    ref_detail = ref_detail.merge(item_meta, on=["품목코드", "거래처"], how="left")
     ref_detail = ref_detail.merge(recent_unit, on=["품목코드", "거래처"], how="left")
     ref_detail = ref_detail.merge(
         unit_extreme[["품목코드", "거래처", "최저단가", "최고단가"]],
@@ -1819,7 +1826,190 @@ def build_quote_reference(q_ref):
         if "최근단가경과일" in special_reference.columns:
             special_reference["최근단가경과일"] = pd.to_numeric(special_reference["최근단가경과일"], errors="coerce").round(0)
 
-    return overview, representative, special_reference
+    return overview, representative, special_reference, ref_detail
+
+
+@st.cache_data(show_spinner=False)
+def build_customer_monthly_scale_profile(q_all):
+    if q_all is None or q_all.empty:
+        return pd.DataFrame(columns=["거래처", "거래처월평균매출", "거래처총개월수", "거래처총매출"])
+
+    required_cols = {"날짜", "거래처", "금액(원)"}
+    if not required_cols.issubset(set(q_all.columns)):
+        return pd.DataFrame(columns=["거래처", "거래처월평균매출", "거래처총개월수", "거래처총매출"])
+
+    df = q_all.copy()
+    df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
+    df = df[df["날짜"].notna()].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["거래처", "거래처월평균매출", "거래처총개월수", "거래처총매출"])
+
+    df["거래처"] = df["거래처"].fillna("").astype(str)
+    df["금액(원)"] = pd.to_numeric(df["금액(원)"], errors="coerce").fillna(0)
+    df["월"] = df["날짜"].dt.strftime("%Y-%m")
+
+    monthly = (
+        df.groupby(["거래처", "월"], dropna=False)["금액(원)"]
+        .sum()
+        .reset_index(name="월매출")
+    )
+    profile = (
+        monthly.groupby("거래처", dropna=False)
+        .agg(
+            거래처월평균매출=("월매출", "mean"),
+            거래처총개월수=("월", "nunique"),
+            거래처총매출=("월매출", "sum"),
+        )
+        .reset_index()
+    )
+    return profile
+
+
+def similarity_to_target(values, target):
+    vals = pd.to_numeric(values, errors="coerce").fillna(0)
+    target = float(target) if target is not None else 0.0
+    if target <= 0:
+        out = pd.Series(np.where(vals > 0, 60.0, 50.0), index=vals.index, dtype=float)
+        return out
+    rel_diff = (vals - target).abs() / max(target, 1.0)
+    score = 100.0 / (1.0 + rel_diff)
+    return score.clip(0, 100)
+
+
+def summarize_quote_recommendation_reason(row):
+    reasons = []
+    if float(row.get("거래처규모적합도", 0)) >= 80:
+        reasons.append("거래처 월평균 매출 규모 유사")
+    if float(row.get("예상품목매출적합도", 0)) >= 80:
+        reasons.append("예상 품목 월매출 유사")
+    if float(row.get("예상품목수량적합도", 0)) >= 80:
+        reasons.append("예상 품목 월수량 유사")
+    if float(row.get("최근성점수", 0)) >= 85:
+        reasons.append("최근 단가 데이터 최신")
+    if float(row.get("안정성점수", 0)) >= 70:
+        reasons.append("월별 매출 변동 낮음")
+    price_judgement = str(row.get("단가판단", "")).strip()
+    if price_judgement:
+        reasons.append(price_judgement)
+    return " / ".join(reasons[:4]) if reasons else "유사 조건 기반 일반 추천"
+
+
+@st.cache_data(show_spinner=False)
+def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_code, expected_company_monthly_sales, expected_item_monthly_sales, expected_item_monthly_qty, top_n=12):
+    empty_summary = pd.DataFrame()
+    empty_reco = pd.DataFrame()
+
+    if ref_detail is None or ref_detail.empty or not target_product_code:
+        return empty_summary, empty_reco
+
+    work = ref_detail.copy()
+    work["품목코드"] = work["품목코드"].fillna("").astype(str)
+    work = work[work["품목코드"] == str(target_product_code)].copy()
+    if work.empty:
+        return empty_summary, empty_reco
+
+    customer_profile = build_customer_monthly_scale_profile(q_all)
+    if not customer_profile.empty:
+        work = work.merge(customer_profile, on="거래처", how="left")
+    else:
+        work["거래처월평균매출"] = np.nan
+        work["거래처총개월수"] = np.nan
+        work["거래처총매출"] = np.nan
+
+    num_cols = [
+        "월평균_출고량", "월평균_매출", "총매출액", "매출CV", "매출기울기",
+        "최근단가", "최저단가", "최고단가", "최근단가경과일", "최근단가위치(%)",
+        "거래처월평균매출", "거래처총개월수", "거래처총매출", "개월수"
+    ]
+    for col in num_cols:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    def positive_median(series, fallback=0.0):
+        ser = pd.to_numeric(series, errors="coerce")
+        ser = ser[ser > 0]
+        if len(ser) == 0:
+            return float(fallback)
+        return float(np.nanmedian(ser))
+
+    target_company = float(expected_company_monthly_sales) if float(expected_company_monthly_sales or 0) > 0 else positive_median(work.get("거래처월평균매출", pd.Series(dtype=float)))
+    target_item_sales = float(expected_item_monthly_sales) if float(expected_item_monthly_sales or 0) > 0 else positive_median(work.get("월평균_매출", pd.Series(dtype=float)))
+    target_item_qty = float(expected_item_monthly_qty) if float(expected_item_monthly_qty or 0) > 0 else positive_median(work.get("월평균_출고량", pd.Series(dtype=float)))
+
+    work["거래처규모적합도"] = similarity_to_target(work.get("거래처월평균매출", 0), target_company)
+    work["예상품목매출적합도"] = similarity_to_target(work.get("월평균_매출", 0), target_item_sales)
+    work["예상품목수량적합도"] = similarity_to_target(work.get("월평균_출고량", 0), target_item_qty)
+
+    age = pd.to_numeric(work.get("최근단가경과일", np.nan), errors="coerce")
+    work["최근성점수"] = np.select(
+        [age <= 31, age <= 62, age <= 93, age <= 186],
+        [100.0, 85.0, 65.0, 40.0],
+        default=20.0,
+    )
+    work.loc[age.isna(), "최근성점수"] = 35.0
+
+    if "매출CV" in work.columns:
+        work["안정성점수"] = scale_to_100(work["매출CV"].fillna(work["매출CV"].median() if work["매출CV"].notna().any() else 0), reverse=True)
+    else:
+        work["안정성점수"] = 50.0
+
+    pos = pd.to_numeric(work.get("최근단가위치(%)", np.nan), errors="coerce").fillna(50.0)
+    work["가격레퍼런스점수"] = (100.0 - (pos - 45.0).abs() * 2.0).clip(0, 100)
+    activity = scale_to_100(work.get("개월수", 0)).fillna(50.0) * 0.5 + scale_to_100(work.get("총매출액", 0)).fillna(50.0) * 0.5
+    work["활동성점수"] = activity.round(1)
+
+    work["견적추천점수"] = (
+        work["거래처규모적합도"] * 0.25 +
+        work["예상품목매출적합도"] * 0.25 +
+        work["예상품목수량적합도"] * 0.20 +
+        work["최근성점수"] * 0.12 +
+        work["안정성점수"] * 0.08 +
+        work["가격레퍼런스점수"] * 0.05 +
+        work["활동성점수"] * 0.05
+    ).round(1)
+
+    work["추천사유"] = work.apply(summarize_quote_recommendation_reason, axis=1)
+    work = work.sort_values(
+        ["견적추천점수", "거래처규모적합도", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "총매출액"],
+        ascending=[False, False, False, False, False, False]
+    ).reset_index(drop=True)
+    work["추천순위"] = range(1, len(work) + 1)
+    work["적합도등급"] = pd.cut(
+        work["견적추천점수"],
+        bins=[-np.inf, 60, 75, 90, np.inf],
+        labels=["C", "B", "A", "S"],
+    ).astype(str)
+
+    top_n = max(3, int(top_n))
+    top_ref = work.head(min(top_n, len(work))).copy()
+    price_pool = pd.to_numeric(top_ref.get("최근단가", np.nan), errors="coerce").dropna()
+    if len(price_pool) == 0:
+        return empty_summary, work
+
+    weights = top_ref.loc[price_pool.index, "견적추천점수"].clip(lower=1).astype(float)
+    if float(weights.sum()) <= 0:
+        weights = pd.Series(np.ones(len(price_pool)), index=price_pool.index)
+
+    recommended_base = float(np.average(price_pool, weights=weights))
+    recommended_low = float(np.nanpercentile(price_pool, 25))
+    recommended_high = float(np.nanpercentile(price_pool, 75))
+    median_recent_age = float(np.nanmedian(pd.to_numeric(top_ref.get("최근단가경과일", np.nan), errors="coerce"))) if top_ref.get("최근단가경과일") is not None and pd.to_numeric(top_ref.get("최근단가경과일", np.nan), errors="coerce").notna().any() else np.nan
+
+    summary = pd.DataFrame([{
+        "품목코드": str(target_product_code),
+        "입력_거래처월평균매출": int(round(target_company, 0)) if target_company > 0 else 0,
+        "입력_품목예상월매출": int(round(target_item_sales, 0)) if target_item_sales > 0 else 0,
+        "입력_품목예상월수량": round(target_item_qty, 1) if target_item_qty > 0 else 0,
+        "추천하한단가": int(round(recommended_low, 0)),
+        "추천기준단가": int(round(recommended_base, 0)),
+        "추천상한단가": int(round(recommended_high, 0)),
+        "활용레퍼런스수": int(len(top_ref)),
+        "전체후보수": int(len(work)),
+        "상위레퍼런스최근단가중앙경과일": int(round(median_recent_age, 0)) if pd.notna(median_recent_age) else 0,
+        "추천기준": "거래처 규모 + 예상 품목 매출/수량 + 최근성 + 안정성 기반",
+    }])
+
+    return summary, work
 
 
 def draw_quote_reference_chart(special_df):
@@ -3071,7 +3261,7 @@ with tab3:
     if q_ref.empty:
         st.warning("조건에 맞는 데이터가 없습니다.")
     else:
-        overview, rep_ref, special_ref = build_quote_reference(q_ref)
+        overview, rep_ref, special_ref, ref_detail = build_quote_reference(q_ref)
 
         st.markdown("### 1) 품목 기준 견적 레퍼런스")
         overview_cols = [
@@ -3174,6 +3364,148 @@ with tab3:
             file_name="대표업체_레퍼런스.csv",
             mime="text/csv",
         )
+
+        st.markdown("---")
+        st.markdown("### 5) 신규 거래처 견적용 추천 레퍼런스")
+        st.caption("거래처 월평균 매출 규모와 해당 품목의 예상 월매출·월수량을 함께 반영해 유사 레퍼런스를 추천합니다. 기존 탭 계산 로직은 유지하고, 이 섹션만 별도 캐시 분석으로 추가했습니다.")
+
+        if ref_detail.empty:
+            st.info("추천 레퍼런스를 계산할 상세 데이터가 없습니다.")
+        else:
+            product_options = sorted(ref_detail["품목코드"].dropna().astype(str).unique().tolist())
+            if not product_options:
+                st.info("선택 가능한 품목코드가 없습니다.")
+            else:
+                if len(product_options) == 1:
+                    selected_quote_product = product_options[0]
+                    st.caption(f"분석 대상 품목코드: {selected_quote_product}")
+                else:
+                    selected_quote_product = st.selectbox(
+                        "신규 견적 기준 품목코드",
+                        options=product_options,
+                        key="quote_ref_target_product"
+                    )
+
+                customer_profile_df = build_customer_monthly_scale_profile(q)
+                base_item_detail = ref_detail[ref_detail["품목코드"].astype(str) == str(selected_quote_product)].copy()
+                if not customer_profile_df.empty and not base_item_detail.empty:
+                    base_item_detail = base_item_detail.merge(customer_profile_df, on="거래처", how="left")
+
+                def _safe_median(series, default=0.0):
+                    ser = pd.to_numeric(series, errors="coerce")
+                    ser = ser[ser > 0]
+                    if len(ser) == 0:
+                        return default
+                    return float(np.nanmedian(ser))
+
+                default_company_sales = int(round(_safe_median(base_item_detail.get("거래처월평균매출", pd.Series(dtype=float)), 0), 0)) if not base_item_detail.empty else 0
+                default_item_sales = int(round(_safe_median(base_item_detail.get("월평균_매출", pd.Series(dtype=float)), 0), 0)) if not base_item_detail.empty else 0
+                default_item_qty = round(_safe_median(base_item_detail.get("월평균_출고량", pd.Series(dtype=float)), 0), 1) if not base_item_detail.empty else 0.0
+
+                col_q1, col_q2, col_q3 = st.columns(3)
+                expected_company_monthly_sales = col_q1.number_input(
+                    "신규 거래처 예상 월평균 매출액(원)",
+                    min_value=0,
+                    value=max(0, default_company_sales),
+                    step=100000,
+                    key="quote_ref_expected_company_sales"
+                )
+                expected_item_monthly_sales = col_q2.number_input(
+                    "해당 품목 예상 월매출액(원)",
+                    min_value=0,
+                    value=max(0, default_item_sales),
+                    step=100000,
+                    key="quote_ref_expected_item_sales"
+                )
+                expected_item_monthly_qty = col_q3.number_input(
+                    "해당 품목 예상 월수량(M2)",
+                    min_value=0.0,
+                    value=max(0.0, float(default_item_qty)),
+                    step=100.0,
+                    key="quote_ref_expected_item_qty"
+                )
+
+                reco_summary, reco_detail = build_new_customer_quote_recommendation(
+                    q,
+                    ref_detail,
+                    selected_quote_product,
+                    float(expected_company_monthly_sales),
+                    float(expected_item_monthly_sales),
+                    float(expected_item_monthly_qty),
+                )
+
+                if reco_summary.empty or reco_detail.empty:
+                    st.info("추천 레퍼런스를 계산할 수 있는 데이터가 부족합니다.")
+                else:
+                    st.markdown("#### 추천 기준단가 요약")
+                    summary_cols = [
+                        "품목코드", "입력_거래처월평균매출", "입력_품목예상월매출", "입력_품목예상월수량",
+                        "추천하한단가", "추천기준단가", "추천상한단가", "활용레퍼런스수", "전체후보수",
+                        "상위레퍼런스최근단가중앙경과일", "추천기준"
+                    ]
+                    clean_and_safe_display(
+                        reco_summary[summary_cols],
+                        pinned_cols=["품목코드"],
+                        text_cols=["품목코드", "추천기준"],
+                        height=calc_table_height(reco_summary, min_rows=1, max_rows=3),
+                        column_width_overrides={
+                            "품목코드": 145,
+                            "입력_거래처월평균매출": 125,
+                            "입력_품목예상월매출": 125,
+                            "입력_품목예상월수량": 115,
+                            "추천하한단가": 90,
+                            "추천기준단가": 95,
+                            "추천상한단가": 90,
+                            "활용레퍼런스수": 80,
+                            "전체후보수": 70,
+                            "상위레퍼런스최근단가중앙경과일": 140,
+                            "추천기준": 250,
+                        },
+                    )
+
+                    st.markdown("#### 유사 레퍼런스 TOP")
+                    reco_cols = [
+                        "추천순위", "적합도등급", "품목코드", "거래처", "거래처월평균매출", "월평균_매출", "월평균_출고량",
+                        "최근날짜", "최근단가", "최근단가경과일", "단가판단", "견적추천점수",
+                        "거래처규모적합도", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "안정성점수", "추천사유"
+                    ]
+                    reco_cols = [c for c in reco_cols if c in reco_detail.columns]
+                    reco_top = reco_detail.head(12).copy()
+                    clean_and_safe_display(
+                        reco_top[reco_cols],
+                        pinned_cols=["추천순위", "품목코드", "거래처"],
+                        text_cols=["적합도등급", "품목코드", "거래처", "최근날짜", "단가판단", "추천사유"],
+                        height=calc_table_height(reco_top, min_rows=5, max_rows=12),
+                        column_width_overrides={
+                            "추천순위": 60,
+                            "적합도등급": 70,
+                            "품목코드": 145,
+                            "거래처": 150,
+                            "거래처월평균매출": 120,
+                            "월평균_매출": 105,
+                            "월평균_출고량": 95,
+                            "최근날짜": 95,
+                            "최근단가": 85,
+                            "최근단가경과일": 95,
+                            "단가판단": 150,
+                            "견적추천점수": 95,
+                            "거래처규모적합도": 105,
+                            "예상품목매출적합도": 120,
+                            "예상품목수량적합도": 120,
+                            "최근성점수": 85,
+                            "안정성점수": 85,
+                            "추천사유": 320,
+                        },
+                    )
+
+                    reco_csv = reco_top[reco_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                    st.download_button(
+                        "📥 신규 거래처 견적 추천 레퍼런스 CSV 다운로드",
+                        data=reco_csv,
+                        file_name=f"신규거래처_견적추천레퍼런스_{selected_quote_product}.csv",
+                        mime="text/csv",
+                        key="download_new_quote_reference_csv",
+                    )
 
 with tab4:
     st.subheader("매출 하락 업체 분석")
