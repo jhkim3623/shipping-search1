@@ -1227,7 +1227,7 @@ def load_excel(file_bytes):
     if "날짜" in rec.columns:
         rec["날짜"] = pd.to_datetime(rec["날짜"], errors="coerce")
 
-    for c in ["가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)"]:
+    for c in ["기준폭", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)"]:
         if c in rec.columns:
             rec[c] = pd.to_numeric(rec[c], errors="coerce")
 
@@ -1236,6 +1236,8 @@ def load_excel(file_bytes):
 
     if "비고" not in rec.columns:
         rec["비고"] = ""
+    if "재단구분" not in rec.columns:
+        rec["재단구분"] = ""
 
     def normalize(df, col):
         if col in df.columns:
@@ -1871,6 +1873,110 @@ def build_quote_reference(q_ref):
             special_reference["최근단가경과일"] = pd.to_numeric(special_reference["최근단가경과일"], errors="coerce").round(0)
 
     return overview, representative, special_reference, ref_detail
+
+
+PRODUCT_LINER_HINTS = [
+    "백그", "옥그", "황박", "옥박", "백박", "투명데", "은무데", "은광데",
+    "백색데", "크라프트", "양P", "양S", "중S", "초S", "WG", "CP", "코벡"
+]
+
+
+
+def normalize_product_search_text(value):
+    if value is None:
+        return ""
+    return "".join(str(value).strip().lower().split())
+
+
+
+def split_material_and_spec(part):
+    part = str(part or "").strip()
+    if not part:
+        return "", ""
+    digit_match = next((i for i, ch in enumerate(part) if ch.isdigit()), None)
+    if digit_match is None:
+        return part, ""
+    return part[:digit_match].strip(), part[digit_match:].strip()
+
+
+
+def parse_product_bom_components(product_code, adhesive_code=""):
+    code = str(product_code or "").strip()
+    left, right = code.split("/", 1) if "/" in code else (code, "")
+    left = left.strip()
+    adhesive = str(adhesive_code or "").strip() or right.strip()
+
+    facestock = ""
+    facestock_spec = ""
+    liner = ""
+    liner_spec = ""
+
+    first_digit_idx = next((i for i, ch in enumerate(left) if ch.isdigit()), None)
+    if first_digit_idx is not None:
+        facestock = left[:first_digit_idx].strip()
+        remainder = left[first_digit_idx:]
+        spec_chars = []
+        split_at = len(remainder)
+        for idx, ch in enumerate(remainder):
+            if ch.isdigit() or ("A" <= ch <= "Z") or ("a" <= ch <= "z") or ch in ".-_()":
+                spec_chars.append(ch)
+            else:
+                split_at = idx
+                break
+        facestock_spec = "".join(spec_chars).strip()
+        liner_part = remainder[split_at:].strip()
+    else:
+        liner_part = ""
+        split_idx = None
+        for hint in PRODUCT_LINER_HINTS:
+            pos = left.find(hint, 1)
+            if pos > 0 and (split_idx is None or pos < split_idx):
+                split_idx = pos
+        if split_idx is not None:
+            facestock = left[:split_idx].strip()
+            liner_part = left[split_idx:].strip()
+        else:
+            facestock = left.strip()
+
+    liner, liner_spec = split_material_and_spec(liner_part)
+
+    return {
+        "원지": facestock,
+        "원지(평량/두께)": facestock_spec,
+        "이형지": liner,
+        "이형지(평량/두께)": liner_spec,
+        "점착제": adhesive,
+        "_원지검색": normalize_product_search_text(facestock),
+        "_원지사양검색": normalize_product_search_text(facestock_spec),
+        "_이형지검색": normalize_product_search_text(liner),
+        "_이형지사양검색": normalize_product_search_text(liner_spec),
+        "_점착제검색": normalize_product_search_text(adhesive),
+    }
+
+
+@st.cache_data(show_spinner=False)
+def build_product_bom_lookup(product_codes):
+    rows = []
+    for code in pd.Series(list(product_codes or [])).dropna().astype(str).unique().tolist():
+        parsed = parse_product_bom_components(code)
+        parsed["품목코드"] = code
+        rows.append(parsed)
+    return pd.DataFrame(rows)
+
+
+
+def build_group_history_frame(df, group_cols, value_col, output_col):
+    valid_group_cols = [c for c in (group_cols or []) if c in df.columns]
+    if df is None or df.empty or not valid_group_cols or value_col not in df.columns:
+        return pd.DataFrame(columns=valid_group_cols + [output_col])
+
+    history = (
+        df.groupby(valid_group_cols, dropna=False)[value_col]
+        .apply(join_unique_width_text)
+        .reset_index()
+        .rename(columns={value_col: output_col})
+    )
+    return history
 
 
 @st.cache_data(show_spinner=False)
@@ -3282,9 +3388,10 @@ if sel_prod and "품목코드" in q.columns:
 if sel_adh and "점착제코드" in q.columns:
     q = q[q["점착제코드"].astype(str).isin(sel_adh)]
 
-tab1, tab2, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs([
+tab1, tab2, tab_new, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs([
     "거래처별 검색",
     "품목별 검색",
+    "🔎 품목 검색",
     "🏷️ 견적 레퍼런스",
     "📉 매출 하락 분석",
     "📈 매출 상승 분석",
@@ -3306,17 +3413,21 @@ with tab1:
         else:
             q1["월"] = ""
 
-        for c in ["거래처", "품목코드", "점착제코드", "점착제명"]:
+        for c in ["거래처", "품목코드", "점착제코드", "점착제명", "재단구분"]:
             if c in q1.columns:
                 q1[c] = q1[c].fillna("").astype(str)
 
         key_cols = [c for c in ["거래처", "품목코드", "점착제코드", "점착제명"] if c in q1.columns]
+        history_group_cols = [c for c in ["거래처", "품목코드"] if c in q1.columns]
+
         latest_info = build_filtered_recent_snapshot(
             q1,
             key_cols,
             include_width_history=True,
-            width_group_cols=[c for c in ["거래처", "품목코드"] if c in q1.columns],
+            width_group_cols=history_group_cols,
         )
+        cut_history = build_group_history_frame(q1, history_group_cols, "재단구분", "재단구분")
+        base_width_history = build_group_history_frame(q1, history_group_cols, "기준폭", "기준폭이력")
 
         g = (
             q1.groupby(key_cols, dropna=False)
@@ -3330,11 +3441,15 @@ with tab1:
             .reset_index()
         )
         g = g.merge(latest_info, on=key_cols, how="left")
+        if not cut_history.empty:
+            g = g.merge(cut_history, on=history_group_cols, how="left")
+        if not base_width_history.empty:
+            g = g.merge(base_width_history, on=history_group_cols, how="left")
 
         g["가중평균단가"] = np.where(g["총량_M2"] > 0, (g["매출액"] / g["총량_M2"]).round(0), 0)
 
         ordered_cols = [
-            "거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력",
+            "거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력",
             "최근날짜", "최근단가", "출고횟수", "월평균_출고량", "월평균_매출",
             "총량_M2", "매출액", "가중평균단가"
         ]
@@ -3346,13 +3461,15 @@ with tab1:
         clean_and_safe_display(
             tab1_df,
             pinned_cols=["거래처", "품목코드"],
-            text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜"],
+            text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력", "최근날짜"],
             height=calc_table_height(tab1_df),
             column_width_overrides={
                 "거래처": 170,
                 "품목코드": 145,
                 "점착제코드": 95,
                 "점착제명": 120,
+                "재단구분": 90,
+                "기준폭이력": 120,
                 "가로폭이력": 260,
                 "최근날짜": 95,
                 "최근단가": 70,
@@ -3423,6 +3540,101 @@ with tab2:
                 "가중평균단가": 100,
             },
         )
+
+with tab_new:
+    st.subheader("🔎 품목 검색 — 최근 6개월 품목 기준 견적 레퍼런스")
+
+    q_recent = rec.copy()
+    if dept_col and sel_dept:
+        q_recent = q_recent[q_recent[dept_col].astype(str).str.strip().isin(sel_dept)]
+    if manager_col and sel_manager:
+        q_recent = q_recent[q_recent[manager_col].astype(str).str.strip().isin(sel_manager)]
+    if sel_cust and "거래처" in q_recent.columns:
+        q_recent = q_recent[q_recent["거래처"].astype(str).isin(sel_cust)]
+    if sel_prod and "품목코드" in q_recent.columns:
+        q_recent = q_recent[q_recent["품목코드"].astype(str).isin(sel_prod)]
+    if sel_adh and "점착제코드" in q_recent.columns:
+        q_recent = q_recent[q_recent["점착제코드"].astype(str).isin(sel_adh)]
+
+    recent_end_dt = pd.to_datetime(edate) if edate is not None else pd.to_datetime(q_recent["날짜"].max(), errors="coerce")
+    recent_start_dt = None
+    if pd.notna(recent_end_dt):
+        recent_start_dt = recent_end_dt - pd.DateOffset(months=6)
+        if "날짜" in q_recent.columns:
+            q_recent = q_recent[
+                (pd.to_datetime(q_recent["날짜"], errors="coerce") >= recent_start_dt) &
+                (pd.to_datetime(q_recent["날짜"], errors="coerce") <= recent_end_dt)
+            ]
+
+    if "단가(원/M2)" in q_recent.columns:
+        q_recent = q_recent[q_recent["단가(원/M2)"].notna() & (q_recent["단가(원/M2)"] > 0)]
+
+    for col in ["품목코드", "품목명(공식)"]:
+        if col in q_recent.columns:
+            q_recent = q_recent[~q_recent[col].astype(str).str.contains("샘플", case=False, na=False)]
+
+    filter_cols = st.columns(5)
+    facestock_kw = filter_cols[0].text_input("원지", key="product_search_facestock", placeholder="예: 모조")
+    facestock_spec_kw = filter_cols[1].text_input("원지(평량/두께)", key="product_search_facestock_spec", placeholder="예: 80")
+    liner_kw = filter_cols[2].text_input("이형지", key="product_search_liner", placeholder="예: 백그")
+    liner_spec_kw = filter_cols[3].text_input("이형지(평량/두께)", key="product_search_liner_spec", placeholder="예: 100")
+    adhesive_kw = filter_cols[4].text_input("점착제", key="product_search_adhesive", placeholder="예: 270")
+
+    if q_recent.empty:
+        st.warning("최근 6개월 조건에 맞는 데이터가 없습니다.")
+    else:
+        bom_lookup = build_product_bom_lookup(tuple(sorted(q_recent["품목코드"].dropna().astype(str).unique().tolist())))
+        q_recent_search = q_recent.merge(bom_lookup, on="품목코드", how="left") if not bom_lookup.empty else q_recent.copy()
+
+        search_rules = [
+            ("_원지검색", facestock_kw),
+            ("_원지사양검색", facestock_spec_kw),
+            ("_이형지검색", liner_kw),
+            ("_이형지사양검색", liner_spec_kw),
+            ("_점착제검색", adhesive_kw),
+        ]
+        for col_name, keyword in search_rules:
+            normalized_kw = normalize_product_search_text(keyword)
+            if normalized_kw:
+                if col_name not in q_recent_search.columns:
+                    q_recent_search[col_name] = ""
+                q_recent_search = q_recent_search[
+                    q_recent_search[col_name].fillna("").astype(str).str.contains(normalized_kw, case=False, na=False)
+                ]
+
+        period_label = "기간 정보 없음"
+        if pd.notna(recent_start_dt) and pd.notna(recent_end_dt):
+            period_label = f"{recent_start_dt.strftime('%Y-%m-%d')} ~ {recent_end_dt.strftime('%Y-%m-%d')}"
+        st.caption(f"최근 6개월 기준 데이터 범위: {period_label} · 조회건수: {len(q_recent_search):,}건")
+
+        if q_recent_search.empty:
+            st.info("입력한 BOM 조건과 일치하는 품목이 없습니다.")
+        else:
+            recent_overview, _, _, _ = build_quote_reference(q_recent_search)
+            overview_cols = [
+                "품목코드", "점착제코드", "최저단가", "최고단가", "거래처수",
+                "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
+            ]
+            overview_cols = [c for c in overview_cols if c in recent_overview.columns]
+
+            clean_and_safe_display(
+                recent_overview[overview_cols] if overview_cols else pd.DataFrame(),
+                pinned_cols=["품목코드"],
+                text_cols=["품목코드", "점착제코드"],
+                height=None,
+                column_width_overrides={
+                    "품목코드": 165,
+                    "점착제코드": 90,
+                    "최저단가": 70,
+                    "최고단가": 70,
+                    "거래처수": 70,
+                    "총출고횟수": 85,
+                    "월평균_출고량": 95,
+                    "월평균_매출": 95,
+                    "총량_M2": 85,
+                    "총매출액": 110,
+                },
+            )
 
 with tab3:
     st.subheader("🏷️ 견적 레퍼런스 — 기준 견적가 & 판매 동향")
@@ -6042,18 +6254,30 @@ with tab6b:
 
 with tab7:
     st.subheader("원자료(필터 적용됨)")
-    raw_cols = [c for c in q.columns if c != "품목명(공식)"]
+    raw_priority_cols = [
+        "날짜", "거래처", "담당부서", "영업담당부서", "담당자", "재단구분",
+        "품목코드", "점착제코드", "점착제명", "기준폭", "가로폭(mm)", "가로폭이력",
+        "수량(M2)", "단가(원/M2)", "금액(원)", "최근날짜", "최근단가", "비고"
+    ]
+    raw_cols = [c for c in raw_priority_cols if c in q.columns and c != "품목명(공식)"]
+    raw_cols += [c for c in q.columns if c not in raw_cols and c != "품목명(공식)"]
+
     clean_and_safe_display(
         q[raw_cols],
         pinned_cols=["거래처", "품목코드"],
-        text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "가로폭이력", "최근날짜", "월", "비고", "담당부서", "영업담당부서", "담당자"],
+        text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "가로폭이력", "최근날짜", "월", "비고", "담당부서", "영업담당부서", "담당자"],
         column_width_overrides={
             "날짜": 95,
             "거래처": 120,
+            "담당부서": 110,
+            "영업담당부서": 120,
+            "담당자": 95,
+            "재단구분": 90,
             "품목코드": 145,
             "품목표시": 220,
             "점착제코드": 95,
             "점착제명": 120,
+            "기준폭": 90,
             "가로폭(mm)": 90,
             "가로폭이력": 220,
             "수량(M2)": 90,
@@ -6062,8 +6286,5 @@ with tab7:
             "최근날짜": 95,
             "최근단가": 85,
             "비고": 220,
-            "담당부서": 110,
-            "영업담당부서": 120,
-            "담당자": 95,
         },
     )
