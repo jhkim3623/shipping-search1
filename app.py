@@ -6,6 +6,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+try:
+    pd.options.mode.copy_on_write = True
+except Exception:
+    pass
+
 st.set_page_config(page_title="출고 이력 검색", layout="wide")
 
 st.markdown("""
@@ -649,6 +654,100 @@ def sorted_unique(series):
         return []
 
 
+CACHE_DATA_LARGE_MAX_ENTRIES = 2
+CACHE_DATA_MEDIUM_MAX_ENTRIES = 6
+
+
+def optimize_dataframe_memory(df, text_threshold=0.6):
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+
+    for col in out.columns:
+        s = out[col]
+        if pd.api.types.is_integer_dtype(s):
+            out[col] = pd.to_numeric(s, downcast="integer")
+        elif pd.api.types.is_float_dtype(s):
+            out[col] = pd.to_numeric(s, downcast="float")
+        elif pd.api.types.is_object_dtype(s):
+            non_null = s.dropna()
+            if len(non_null) == 0:
+                continue
+            sample_ratio = min(1.0, len(non_null) / max(len(s), 1))
+            if sample_ratio >= text_threshold:
+                try:
+                    out[col] = s.astype("string")
+                except Exception:
+                    pass
+    return out
+
+
+def initialize_filter_state(key, default_value):
+    if key not in st.session_state:
+        if isinstance(default_value, list):
+            st.session_state[key] = list(default_value)
+        else:
+            st.session_state[key] = default_value
+
+
+def apply_filters(df, dept_col=None, manager_col=None, sel_dept=None, sel_manager=None, sel_cust=None, sel_prod=None, sel_adh=None, start_ts=None, end_ts=None):
+    if df is None or df.empty:
+        return pd.DataFrame(columns=df.columns if isinstance(df, pd.DataFrame) else None)
+
+    mask = pd.Series(True, index=df.index)
+
+    if dept_col and sel_dept and dept_col in df.columns:
+        mask &= df[dept_col].isin(sel_dept)
+    if manager_col and sel_manager and manager_col in df.columns:
+        mask &= df[manager_col].isin(sel_manager)
+    if sel_cust and "거래처" in df.columns:
+        mask &= df["거래처"].isin(sel_cust)
+    if sel_prod and "품목코드" in df.columns:
+        mask &= df["품목코드"].isin(sel_prod)
+    if sel_adh and "점착제코드" in df.columns:
+        mask &= df["점착제코드"].isin(sel_adh)
+    if start_ts is not None and end_ts is not None and "날짜" in df.columns:
+        dates = pd.to_datetime(df["날짜"], errors="coerce")
+        mask &= dates.between(start_ts, end_ts)
+
+    return df.loc[mask].copy()
+
+
+def exact_or_contains_map(series, alias_df, typ):
+    if alias_df is None or alias_df.empty or series is None:
+        return pd.Series([None] * len(series), index=series.index)
+
+    df = alias_df.copy()
+    if not {"유형", "별칭", "공식코드"} <= set(df.columns):
+        return pd.Series([None] * len(series), index=series.index)
+
+    df = df[df["유형"].astype(str) == typ].dropna(subset=["별칭", "공식코드"]).copy()
+    if df.empty:
+        return pd.Series([None] * len(series), index=series.index)
+
+    df["별칭"] = df["별칭"].astype(str).str.strip()
+    df["공식코드"] = df["공식코드"].astype(str).str.strip()
+    exact_map = dict(zip(df["별칭"], df["공식코드"]))
+
+    normalized = series.fillna("").astype(str).str.strip()
+    out = normalized.map(exact_map)
+
+    unresolved = out.isna() & normalized.ne("")
+    if unresolved.any():
+        alias_pairs = [(a, c) for a, c in zip(df["별칭"].tolist(), df["공식코드"].tolist()) if a]
+
+        def _find_match(value):
+            for alias_text, code in alias_pairs:
+                if alias_text in value:
+                    return code
+            return None
+
+        out.loc[unresolved] = normalized.loc[unresolved].map(_find_match)
+
+    return out
+
+
 def add_year_month_axis(fig, x_dates):
     dt = pd.to_datetime(pd.Series(x_dates), errors="coerce").dropna().sort_values().unique()
     if len(dt) == 0:
@@ -1199,9 +1298,9 @@ def infer_customer_growth_reason(row):
     return " | ".join(comments[:5])
 
 
-@st.cache_data
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_LARGE_MAX_ENTRIES)
 def load_excel(file_bytes):
-    xls = pd.ExcelFile(BytesIO(file_bytes))
+    xls = pd.ExcelFile(BytesIO(file_bytes), engine="openpyxl")
 
     def read_sheet(name, required=True):
         try:
@@ -1281,7 +1380,7 @@ def load_excel(file_bytes):
             if col not in rec.columns:
                 rec[col] = pd.NA
             if src in rec.columns:
-                rec[col] = rec[col].fillna(map_alias(rec[src], alias, typ))
+                rec[col] = rec[col].fillna(exact_or_contains_map(rec[src], alias, typ))
 
     for c in ["품목코드", "점착제코드"]:
         normalize(rec, c)
@@ -1299,13 +1398,17 @@ def load_excel(file_bytes):
             how="left",
         )
 
-    tmp = rec.copy()
-    tmp["_cs"] = tmp["거래처"].astype(str).fillna("") if "거래처" in tmp.columns else ""
-    tmp["_ps"] = tmp["품목코드"].astype(str).fillna("") if "품목코드" in tmp.columns else ""
-    sc = ["_cs", "_ps"] + (["날짜"] if "날짜" in tmp.columns else [])
-    tmp = tmp.sort_values(sc, kind="mergesort")
+    tmp_cols = [c for c in ["거래처", "품목코드", "날짜", "단가(원/M2)"] if c in rec.columns]
+    tmp = rec[tmp_cols].copy() if tmp_cols else pd.DataFrame()
+    if not tmp.empty:
+        if "거래처" in tmp.columns:
+            tmp["거래처"] = tmp["거래처"].fillna("")
+        if "품목코드" in tmp.columns:
+            tmp["품목코드"] = tmp["품목코드"].fillna("")
+        sc = [c for c in ["거래처", "품목코드", "날짜"] if c in tmp.columns]
+        tmp = tmp.sort_values(sc, kind="mergesort")
 
-    if "단가(원/M2)" in tmp.columns and {"거래처", "품목코드"} <= set(tmp.columns):
+    if not tmp.empty and "단가(원/M2)" in tmp.columns and {"거래처", "품목코드"} <= set(tmp.columns):
         _t = tmp.dropna(subset=["단가(원/M2)"]).groupby(
             ["거래처", "품목코드"], as_index=False, dropna=False
         ).tail(1)
@@ -1339,10 +1442,16 @@ def load_excel(file_bytes):
     else:
         rec["가로폭이력"] = pd.NA
 
+    rec = optimize_dataframe_memory(rec)
+    alias = optimize_dataframe_memory(alias)
+    prod = optimize_dataframe_memory(prod)
+    adh = optimize_dataframe_memory(adh)
+    cust = optimize_dataframe_memory(cust)
+
     return rec, alias, prod, adh, cust
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_analysis_cache(q):
     df = q.copy()
     df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
@@ -1609,7 +1718,7 @@ def build_growth_priority_results(monthly_sales, detail_df, all_months, selected
     return result_df, first_half, last_half
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_quote_reference(q_ref):
     if q_ref is None or q_ref.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -1954,7 +2063,7 @@ def parse_product_bom_components(product_code, adhesive_code=""):
     }
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_product_bom_lookup(product_codes):
     rows = []
     for code in pd.Series(list(product_codes or [])).dropna().astype(str).unique().tolist():
@@ -1979,7 +2088,7 @@ def build_group_history_frame(df, group_cols, value_col, output_col):
     return history
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_customer_monthly_scale_profile(q_all):
     if q_all is None or q_all.empty:
         return pd.DataFrame(columns=["거래처", "거래처월평균매출", "거래처총개월수", "거래처총매출"])
@@ -2164,7 +2273,7 @@ def summarize_quote_recommendation_reason(row):
     return " / ".join(reasons[:4]) if reasons else "유사 조건 기반 일반 추천"
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_code, expected_company_monthly_sales, expected_item_monthly_sales, expected_item_monthly_qty, price_rule_df=None, direct_compare_days=23, top_n=12):
     empty_summary = pd.DataFrame()
     empty_reco = pd.DataFrame()
@@ -2339,7 +2448,7 @@ def draw_quote_reference_chart(special_df):
     st.plotly_chart(fig, use_container_width=True, key="quote_reference_chart_main")
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_return_decline_item_analysis(q):
     if q is None or q.empty:
         return {}
@@ -2489,7 +2598,7 @@ def build_return_decline_item_analysis(q):
     }
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_growth_item_analysis(q):
     if q is None or q.empty:
         return {}
@@ -2718,7 +2827,7 @@ def build_growth_item_analysis(q):
     }
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_customer_sales_analysis(q, selected_end_month=None):
     if q is None or q.empty:
         return {
@@ -2998,7 +3107,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
     }
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
 def build_customer_integrated_analysis(q, selected_customers_tuple, selected_end_month=None):
     if q is None or q.empty:
         return {
@@ -3308,85 +3417,144 @@ st.sidebar.header("검색 필터")
 dept_col = "담당부서" if "담당부서" in rec.columns else ("영업담당부서" if "영업담당부서" in rec.columns else None)
 manager_col = "담당자" if "담당자" in rec.columns else None
 
-sel_dept = st.sidebar.multiselect(
-    "담당부서",
-    sorted_unique(rec[dept_col]) if dept_col else [],
-    placeholder="Choose options"
-)
-sel_manager = st.sidebar.multiselect(
-    "담당자",
-    sorted_unique(rec[manager_col]) if manager_col else [],
-    placeholder="Choose options"
-)
-sel_cust = st.sidebar.multiselect(
-    "거래처",
-    sorted_unique(rec["거래처"]) if "거래처" in rec.columns else [],
-    placeholder="Choose options"
-)
-sel_prod = st.sidebar.multiselect(
-    "품목코드",
-    sorted_unique(rec["품목코드"]) if "품목코드" in rec.columns else [],
-    placeholder="Choose options"
-)
-sel_adh = st.sidebar.multiselect(
-    "점착제코드",
-    sorted_unique(rec["점착제코드"]) if "점착제코드" in rec.columns else [],
-    placeholder="Choose options"
-)
+dept_options = sorted_unique(rec[dept_col]) if dept_col else []
+manager_options = sorted_unique(rec[manager_col]) if manager_col else []
+cust_options = sorted_unique(rec["거래처"]) if "거래처" in rec.columns else []
+prod_options = sorted_unique(rec["품목코드"]) if "품목코드" in rec.columns else []
+adh_options = sorted_unique(rec["점착제코드"]) if "점착제코드" in rec.columns else []
 
 date_min = pd.to_datetime(rec["날짜"].min()) if "날짜" in rec.columns else None
 date_max = pd.to_datetime(rec["날짜"].max()) if "날짜" in rec.columns else None
 
-sdate = None
-edate = None
+initialize_filter_state("flt_sel_dept", [])
+initialize_filter_state("flt_sel_manager", [])
+initialize_filter_state("flt_sel_cust", [])
+initialize_filter_state("flt_sel_prod", [])
+initialize_filter_state("flt_sel_adh", [])
+if date_min is not None and pd.notna(date_min):
+    initialize_filter_state("flt_start_date", date_min.date())
+if date_max is not None and pd.notna(date_max):
+    initialize_filter_state("flt_end_date", date_max.date())
+
+with st.sidebar.form("search_filter_form", clear_on_submit=False):
+    sel_dept_form = st.multiselect(
+        "담당부서",
+        dept_options,
+        default=st.session_state.get("flt_sel_dept", []),
+        placeholder="Choose options"
+    )
+    sel_manager_form = st.multiselect(
+        "담당자",
+        manager_options,
+        default=st.session_state.get("flt_sel_manager", []),
+        placeholder="Choose options"
+    )
+    sel_cust_form = st.multiselect(
+        "거래처",
+        cust_options,
+        default=st.session_state.get("flt_sel_cust", []),
+        placeholder="Choose options"
+    )
+    sel_prod_form = st.multiselect(
+        "품목코드",
+        prod_options,
+        default=st.session_state.get("flt_sel_prod", []),
+        placeholder="Choose options"
+    )
+    sel_adh_form = st.multiselect(
+        "점착제코드",
+        adh_options,
+        default=st.session_state.get("flt_sel_adh", []),
+        placeholder="Choose options"
+    )
+
+    sdate_form = None
+    edate_form = None
+    if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
+        st.markdown("#### 기간")
+        sdate_form = st.date_input(
+            "시작일",
+            value=st.session_state.get("flt_start_date", date_min.date()),
+            min_value=date_min.date(),
+            max_value=date_max.date(),
+            key="filter_start_date_form"
+        )
+        edate_form = st.date_input(
+            "종료일",
+            value=st.session_state.get("flt_end_date", date_max.date()),
+            min_value=date_min.date(),
+            max_value=date_max.date(),
+            key="filter_end_date_form"
+        )
+
+    apply_col, reset_col = st.columns(2)
+    apply_filters_clicked = apply_col.form_submit_button("필터 적용", use_container_width=True)
+    reset_filters_clicked = reset_col.form_submit_button("초기화", use_container_width=True)
+
+if reset_filters_clicked:
+    st.session_state["flt_sel_dept"] = []
+    st.session_state["flt_sel_manager"] = []
+    st.session_state["flt_sel_cust"] = []
+    st.session_state["flt_sel_prod"] = []
+    st.session_state["flt_sel_adh"] = []
+    if date_min is not None and pd.notna(date_min):
+        st.session_state["flt_start_date"] = date_min.date()
+    if date_max is not None and pd.notna(date_max):
+        st.session_state["flt_end_date"] = date_max.date()
+    st.rerun()
+
+if apply_filters_clicked:
+    st.session_state["flt_sel_dept"] = sel_dept_form
+    st.session_state["flt_sel_manager"] = sel_manager_form
+    st.session_state["flt_sel_cust"] = sel_cust_form
+    st.session_state["flt_sel_prod"] = sel_prod_form
+    st.session_state["flt_sel_adh"] = sel_adh_form
+    if sdate_form is not None:
+        st.session_state["flt_start_date"] = sdate_form
+    if edate_form is not None:
+        st.session_state["flt_end_date"] = edate_form
+
+sel_dept = st.session_state.get("flt_sel_dept", [])
+sel_manager = st.session_state.get("flt_sel_manager", [])
+sel_cust = st.session_state.get("flt_sel_cust", [])
+sel_prod = st.session_state.get("flt_sel_prod", [])
+sel_adh = st.session_state.get("flt_sel_adh", [])
+
+sdate = st.session_state.get("flt_start_date") if date_min is not None and pd.notna(date_min) else None
+edate = st.session_state.get("flt_end_date") if date_max is not None and pd.notna(date_max) else None
 selected_end_month = None
+start_ts = None
+end_ts = None
 
-if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
-    st.sidebar.markdown("#### 기간")
-
-    sdate = st.sidebar.date_input(
-        "시작일",
-        value=date_min.date(),
-        min_value=date_min.date(),
-        max_value=date_max.date(),
-        key="filter_start_date"
-    )
-
-    edate = st.sidebar.date_input(
-        "종료일",
-        value=date_max.date(),
-        min_value=date_min.date(),
-        max_value=date_max.date(),
-        key="filter_end_date"
-    )
-
+if sdate is not None and edate is not None:
     if sdate > edate:
         st.sidebar.error("시작일은 종료일보다 늦을 수 없습니다.")
         st.stop()
-
-    selected_end_month = pd.to_datetime(edate).strftime("%Y-%m")
+    start_ts = pd.Timestamp(sdate)
+    end_ts = pd.Timestamp(edate) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    selected_end_month = pd.Timestamp(edate).strftime("%Y-%m")
 
 st.sidebar.markdown("---")
 st.sidebar.caption("💡 견적 레퍼런스: 품목코드·점착제코드·기간 필터 위주로 사용하세요.")
 
-q_quote_scope = rec.copy()
-if dept_col and sel_dept:
-    q_quote_scope = q_quote_scope[q_quote_scope[dept_col].astype(str).str.strip().isin(sel_dept)]
-if manager_col and sel_manager:
-    q_quote_scope = q_quote_scope[q_quote_scope[manager_col].astype(str).str.strip().isin(sel_manager)]
-if sel_cust and "거래처" in q_quote_scope.columns:
-    q_quote_scope = q_quote_scope[q_quote_scope["거래처"].astype(str).isin(sel_cust)]
-if sdate is not None and edate is not None and "날짜" in q_quote_scope.columns:
-    q_quote_scope = q_quote_scope[
-        (q_quote_scope["날짜"].dt.date >= sdate) &
-        (q_quote_scope["날짜"].dt.date <= edate)
-    ]
+q_quote_scope = apply_filters(
+    rec,
+    dept_col=dept_col,
+    manager_col=manager_col,
+    sel_dept=sel_dept,
+    sel_manager=sel_manager,
+    sel_cust=sel_cust,
+    start_ts=start_ts,
+    end_ts=end_ts,
+)
 
-q = q_quote_scope.copy()
-if sel_prod and "품목코드" in q.columns:
-    q = q[q["품목코드"].astype(str).isin(sel_prod)]
-if sel_adh and "점착제코드" in q.columns:
-    q = q[q["점착제코드"].astype(str).isin(sel_adh)]
+q = apply_filters(
+    q_quote_scope,
+    sel_prod=sel_prod,
+    sel_adh=sel_adh,
+)
+
+st.sidebar.caption(f"현재 필터 결과: {len(q):,}건")
 
 tab1, tab2, tab_new, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs([
     "거래처별 검색",
