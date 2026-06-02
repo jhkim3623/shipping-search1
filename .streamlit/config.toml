@@ -1,0 +1,8 @@
+[runner]
+fastReruns = false
+
+[server]
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
