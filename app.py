@@ -691,6 +691,46 @@ def initialize_filter_state(key, default_value):
             st.session_state[key] = default_value
 
 
+def sanitize_multiselect_state(values, options):
+    if values is None:
+        return []
+    option_set = set(options or [])
+    return [v for v in values if v in option_set]
+
+
+def sanitize_date_state(value, min_date=None, max_date=None):
+    if value is None:
+        return None
+    out = value
+    if min_date is not None and out < min_date:
+        out = min_date
+    if max_date is not None and out > max_date:
+        out = max_date
+    return out
+
+
+def set_filter_state_pair(applied_key, widget_key, value):
+    if isinstance(value, list):
+        copied = list(value)
+        st.session_state[applied_key] = copied
+        st.session_state[widget_key] = list(copied)
+    else:
+        st.session_state[applied_key] = value
+        st.session_state[widget_key] = value
+
+
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
+def build_sidebar_filter_metadata(df, dept_col=None, manager_col=None):
+    dept_options = sorted_unique(df[dept_col]) if dept_col else []
+    manager_options = sorted_unique(df[manager_col]) if manager_col else []
+    cust_options = sorted_unique(df["거래처"]) if "거래처" in df.columns else []
+    prod_options = sorted_unique(df["품목코드"]) if "품목코드" in df.columns else []
+    adh_options = sorted_unique(df["점착제코드"]) if "점착제코드" in df.columns else []
+    date_min = pd.to_datetime(df["날짜"].min()) if "날짜" in df.columns else None
+    date_max = pd.to_datetime(df["날짜"].max()) if "날짜" in df.columns else None
+    return dept_options, manager_options, cust_options, prod_options, adh_options, date_min, date_max
+
+
 def apply_filters(df, dept_col=None, manager_col=None, sel_dept=None, sel_manager=None, sel_cust=None, sel_prod=None, sel_adh=None, start_ts=None, end_ts=None):
     if df is None or df.empty:
         return pd.DataFrame(columns=df.columns if isinstance(df, pd.DataFrame) else None)
@@ -708,7 +748,7 @@ def apply_filters(df, dept_col=None, manager_col=None, sel_dept=None, sel_manage
     if sel_adh and "점착제코드" in df.columns:
         mask &= df["점착제코드"].isin(sel_adh)
     if start_ts is not None and end_ts is not None and "날짜" in df.columns:
-        dates = pd.to_datetime(df["날짜"], errors="coerce")
+        dates = df["날짜"] if pd.api.types.is_datetime64_any_dtype(df["날짜"]) else pd.to_datetime(df["날짜"], errors="coerce")
         mask &= dates.between(start_ts, end_ts)
 
     return df.loc[mask].copy()
@@ -3417,14 +3457,11 @@ st.sidebar.header("검색 필터")
 dept_col = "담당부서" if "담당부서" in rec.columns else ("영업담당부서" if "영업담당부서" in rec.columns else None)
 manager_col = "담당자" if "담당자" in rec.columns else None
 
-dept_options = sorted_unique(rec[dept_col]) if dept_col else []
-manager_options = sorted_unique(rec[manager_col]) if manager_col else []
-cust_options = sorted_unique(rec["거래처"]) if "거래처" in rec.columns else []
-prod_options = sorted_unique(rec["품목코드"]) if "품목코드" in rec.columns else []
-adh_options = sorted_unique(rec["점착제코드"]) if "점착제코드" in rec.columns else []
-
-date_min = pd.to_datetime(rec["날짜"].min()) if "날짜" in rec.columns else None
-date_max = pd.to_datetime(rec["날짜"].max()) if "날짜" in rec.columns else None
+dept_options, manager_options, cust_options, prod_options, adh_options, date_min, date_max = build_sidebar_filter_metadata(
+    rec,
+    dept_col=dept_col,
+    manager_col=manager_col,
+)
 
 initialize_filter_state("flt_sel_dept", [])
 initialize_filter_state("flt_sel_manager", [])
@@ -3436,55 +3473,79 @@ if date_min is not None and pd.notna(date_min):
 if date_max is not None and pd.notna(date_max):
     initialize_filter_state("flt_end_date", date_max.date())
 
+initialize_filter_state("flt_widget_sel_dept", sanitize_multiselect_state(st.session_state.get("flt_sel_dept", []), dept_options))
+initialize_filter_state("flt_widget_sel_manager", sanitize_multiselect_state(st.session_state.get("flt_sel_manager", []), manager_options))
+initialize_filter_state("flt_widget_sel_cust", sanitize_multiselect_state(st.session_state.get("flt_sel_cust", []), cust_options))
+initialize_filter_state("flt_widget_sel_prod", sanitize_multiselect_state(st.session_state.get("flt_sel_prod", []), prod_options))
+initialize_filter_state("flt_widget_sel_adh", sanitize_multiselect_state(st.session_state.get("flt_sel_adh", []), adh_options))
+if date_min is not None and pd.notna(date_min):
+    initialize_filter_state("flt_widget_start_date", sanitize_date_state(st.session_state.get("flt_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None))
+if date_max is not None and pd.notna(date_max):
+    initialize_filter_state("flt_widget_end_date", sanitize_date_state(st.session_state.get("flt_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date()))
+
+# 업로드 파일이 바뀌거나 옵션 목록이 달라져도 이전 값이 잔류하지 않도록 위젯 상태를 정리
+st.session_state["flt_sel_dept"] = sanitize_multiselect_state(st.session_state.get("flt_sel_dept", []), dept_options)
+st.session_state["flt_sel_manager"] = sanitize_multiselect_state(st.session_state.get("flt_sel_manager", []), manager_options)
+st.session_state["flt_sel_cust"] = sanitize_multiselect_state(st.session_state.get("flt_sel_cust", []), cust_options)
+st.session_state["flt_sel_prod"] = sanitize_multiselect_state(st.session_state.get("flt_sel_prod", []), prod_options)
+st.session_state["flt_sel_adh"] = sanitize_multiselect_state(st.session_state.get("flt_sel_adh", []), adh_options)
+st.session_state["flt_widget_sel_dept"] = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_dept", []), dept_options)
+st.session_state["flt_widget_sel_manager"] = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_manager", []), manager_options)
+st.session_state["flt_widget_sel_cust"] = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_cust", []), cust_options)
+st.session_state["flt_widget_sel_prod"] = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_prod", []), prod_options)
+st.session_state["flt_widget_sel_adh"] = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_adh", []), adh_options)
+if date_min is not None and pd.notna(date_min):
+    st.session_state["flt_start_date"] = sanitize_date_state(st.session_state.get("flt_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None)
+    st.session_state["flt_widget_start_date"] = sanitize_date_state(st.session_state.get("flt_widget_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None)
+if date_max is not None and pd.notna(date_max):
+    st.session_state["flt_end_date"] = sanitize_date_state(st.session_state.get("flt_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
+    st.session_state["flt_widget_end_date"] = sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
+
 with st.sidebar.form("search_filter_form", clear_on_submit=False):
-    sel_dept_form = st.multiselect(
+    st.multiselect(
         "담당부서",
         dept_options,
-        default=st.session_state.get("flt_sel_dept", []),
+        key="flt_widget_sel_dept",
         placeholder="Choose options"
     )
-    sel_manager_form = st.multiselect(
+    st.multiselect(
         "담당자",
         manager_options,
-        default=st.session_state.get("flt_sel_manager", []),
+        key="flt_widget_sel_manager",
         placeholder="Choose options"
     )
-    sel_cust_form = st.multiselect(
+    st.multiselect(
         "거래처",
         cust_options,
-        default=st.session_state.get("flt_sel_cust", []),
+        key="flt_widget_sel_cust",
         placeholder="Choose options"
     )
-    sel_prod_form = st.multiselect(
+    st.multiselect(
         "품목코드",
         prod_options,
-        default=st.session_state.get("flt_sel_prod", []),
+        key="flt_widget_sel_prod",
         placeholder="Choose options"
     )
-    sel_adh_form = st.multiselect(
+    st.multiselect(
         "점착제코드",
         adh_options,
-        default=st.session_state.get("flt_sel_adh", []),
+        key="flt_widget_sel_adh",
         placeholder="Choose options"
     )
 
-    sdate_form = None
-    edate_form = None
     if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
         st.markdown("#### 기간")
-        sdate_form = st.date_input(
+        st.date_input(
             "시작일",
-            value=st.session_state.get("flt_start_date", date_min.date()),
             min_value=date_min.date(),
             max_value=date_max.date(),
-            key="filter_start_date_form"
+            key="flt_widget_start_date"
         )
-        edate_form = st.date_input(
+        st.date_input(
             "종료일",
-            value=st.session_state.get("flt_end_date", date_max.date()),
             min_value=date_min.date(),
             max_value=date_max.date(),
-            key="filter_end_date_form"
+            key="flt_widget_end_date"
         )
 
     apply_col, reset_col = st.columns(2)
@@ -3492,36 +3553,36 @@ with st.sidebar.form("search_filter_form", clear_on_submit=False):
     reset_filters_clicked = reset_col.form_submit_button("초기화", use_container_width=True)
 
 if reset_filters_clicked:
-    st.session_state["flt_sel_dept"] = []
-    st.session_state["flt_sel_manager"] = []
-    st.session_state["flt_sel_cust"] = []
-    st.session_state["flt_sel_prod"] = []
-    st.session_state["flt_sel_adh"] = []
+    set_filter_state_pair("flt_sel_dept", "flt_widget_sel_dept", [])
+    set_filter_state_pair("flt_sel_manager", "flt_widget_sel_manager", [])
+    set_filter_state_pair("flt_sel_cust", "flt_widget_sel_cust", [])
+    set_filter_state_pair("flt_sel_prod", "flt_widget_sel_prod", [])
+    set_filter_state_pair("flt_sel_adh", "flt_widget_sel_adh", [])
     if date_min is not None and pd.notna(date_min):
-        st.session_state["flt_start_date"] = date_min.date()
+        set_filter_state_pair("flt_start_date", "flt_widget_start_date", date_min.date())
     if date_max is not None and pd.notna(date_max):
-        st.session_state["flt_end_date"] = date_max.date()
+        set_filter_state_pair("flt_end_date", "flt_widget_end_date", date_max.date())
     st.rerun()
 
 if apply_filters_clicked:
-    st.session_state["flt_sel_dept"] = sel_dept_form
-    st.session_state["flt_sel_manager"] = sel_manager_form
-    st.session_state["flt_sel_cust"] = sel_cust_form
-    st.session_state["flt_sel_prod"] = sel_prod_form
-    st.session_state["flt_sel_adh"] = sel_adh_form
-    if sdate_form is not None:
-        st.session_state["flt_start_date"] = sdate_form
-    if edate_form is not None:
-        st.session_state["flt_end_date"] = edate_form
+    set_filter_state_pair("flt_sel_dept", "flt_widget_sel_dept", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_dept", []), dept_options))
+    set_filter_state_pair("flt_sel_manager", "flt_widget_sel_manager", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_manager", []), manager_options))
+    set_filter_state_pair("flt_sel_cust", "flt_widget_sel_cust", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_cust", []), cust_options))
+    set_filter_state_pair("flt_sel_prod", "flt_widget_sel_prod", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_prod", []), prod_options))
+    set_filter_state_pair("flt_sel_adh", "flt_widget_sel_adh", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_adh", []), adh_options))
+    if date_min is not None and pd.notna(date_min):
+        set_filter_state_pair("flt_start_date", "flt_widget_start_date", sanitize_date_state(st.session_state.get("flt_widget_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None))
+    if date_max is not None and pd.notna(date_max):
+        set_filter_state_pair("flt_end_date", "flt_widget_end_date", sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date()))
 
-sel_dept = st.session_state.get("flt_sel_dept", [])
-sel_manager = st.session_state.get("flt_sel_manager", [])
-sel_cust = st.session_state.get("flt_sel_cust", [])
-sel_prod = st.session_state.get("flt_sel_prod", [])
-sel_adh = st.session_state.get("flt_sel_adh", [])
+sel_dept = sanitize_multiselect_state(st.session_state.get("flt_sel_dept", []), dept_options)
+sel_manager = sanitize_multiselect_state(st.session_state.get("flt_sel_manager", []), manager_options)
+sel_cust = sanitize_multiselect_state(st.session_state.get("flt_sel_cust", []), cust_options)
+sel_prod = sanitize_multiselect_state(st.session_state.get("flt_sel_prod", []), prod_options)
+sel_adh = sanitize_multiselect_state(st.session_state.get("flt_sel_adh", []), adh_options)
 
-sdate = st.session_state.get("flt_start_date") if date_min is not None and pd.notna(date_min) else None
-edate = st.session_state.get("flt_end_date") if date_max is not None and pd.notna(date_max) else None
+sdate = sanitize_date_state(st.session_state.get("flt_start_date") if date_min is not None and pd.notna(date_min) else None, date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date() if date_max is not None and pd.notna(date_max) else None)
+edate = sanitize_date_state(st.session_state.get("flt_end_date") if date_max is not None and pd.notna(date_max) else None, date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date() if date_max is not None and pd.notna(date_max) else None)
 selected_end_month = None
 start_ts = None
 end_ts = None
