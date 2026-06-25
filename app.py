@@ -290,7 +290,7 @@ def safe_make_product_label(df):
         temp["품목명(공식)"] = ""
 
     temp["품목코드"] = temp["품목코드"].astype(str)
-    temp["품목명(공식)"] = temp["품목명(공식)"].fillna("").astype(str)
+    temp["품목명(공식)"] = to_text_series(temp["품목명(공식)"])
 
     temp["품목표시"] = np.where(
         temp["품목명(공식)"].str.strip() != "",
@@ -333,6 +333,19 @@ def format_number_text(value, decimals=0):
     if decimals <= 0:
         return f"{int(round(num, 0)):,}"
     return f"{num:,.{int(decimals)}f}"
+
+
+def to_text_series(series, strip=False):
+    if series is None:
+        return pd.Series(dtype="string")
+    try:
+        out = series.astype("string")
+    except Exception:
+        out = pd.Series(series).astype("string")
+    out = out.fillna("")
+    if strip:
+        out = out.str.strip()
+    return out
 
 
 def init_formatted_input_state(key, default_value, decimals=0):
@@ -858,7 +871,7 @@ def exact_or_contains_map(series, alias_df, typ):
     df["공식코드"] = df["공식코드"].astype(str).str.strip()
     exact_map = dict(zip(df["별칭"], df["공식코드"]))
 
-    normalized = series.fillna("").astype(str).str.strip()
+    normalized = to_text_series(series, strip=True)
     out = normalized.map(exact_map)
 
     unresolved = out.isna() & normalized.ne("")
@@ -1130,7 +1143,7 @@ def build_return_base(df):
     temp["반품수량_표준"] = np.where(temp["반품여부_표준"], temp["수량(M2)"].abs(), 0)
     temp["반품원인_표준"] = np.where(
         temp["반품여부_표준"],
-        temp["비고"].fillna("").astype(str),
+        to_text_series(temp["비고"]),
         ""
     )
     return temp
@@ -1587,7 +1600,7 @@ def build_analysis_cache(q):
     df = safe_make_product_label(df)
 
     monthly_sales = (
-        df.groupby(["거래처", "월"], dropna=False)["금액(원)"]
+        df.groupby(["거래처", "월"], dropna=False, observed=True)["금액(원)"]
         .sum()
         .reset_index()
     )
@@ -1596,7 +1609,7 @@ def build_analysis_cache(q):
     customer_total_monthly["날짜축"] = pd.to_datetime(customer_total_monthly["월"] + "-01")
 
     product_monthly = (
-        df.groupby(["거래처", "품목코드", "품목명(공식)", "품목표시", "월"], dropna=False)["금액(원)"]
+        df.groupby(["거래처", "품목코드", "품목명(공식)", "품목표시", "월"], dropna=False, observed=True)["금액(원)"]
         .sum()
         .reset_index()
     )
@@ -1862,15 +1875,22 @@ def build_quote_reference(q_ref):
         df["점착제코드"] = ""
     if "점착제명" not in df.columns:
         df["점착제명"] = ""
+    if "재단구분" not in df.columns:
+        df["재단구분"] = ""
+    if "기준폭" not in df.columns:
+        df["기준폭"] = pd.NA
 
     df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
     df = df[df["월"].notna() & (df["월"] != "")].copy()
 
-    df["품목코드"] = df["품목코드"].astype(str)
-    df["거래처"] = df["거래처"].astype(str)
-    df["품목명(공식)"] = df["품목명(공식)"].fillna("").astype(str)
-    df["점착제코드"] = df["점착제코드"].fillna("").astype(str)
-    df["점착제명"] = df["점착제명"].fillna("").astype(str)
+    df["품목코드"] = to_text_series(df["품목코드"], strip=True)
+    df["거래처"] = to_text_series(df["거래처"], strip=True)
+    df["품목명(공식)"] = to_text_series(df["품목명(공식)"])
+    df["점착제코드"] = to_text_series(df["점착제코드"], strip=True)
+    df["점착제명"] = to_text_series(df["점착제명"])
+    df["재단구분"] = to_text_series(df["재단구분"], strip=True)
+    df["기준폭"] = pd.to_numeric(df["기준폭"], errors="coerce")
+    df = df.sort_values(["품목코드", "점착제코드", "거래처", "날짜"], kind="mergesort")
 
     overview = (
         df.groupby(["품목코드", "점착제코드", "점착제명"], dropna=False)
@@ -1887,6 +1907,28 @@ def build_quote_reference(q_ref):
     )
     overview["월평균_출고량"] = np.where(overview["개월수"] > 0, overview["총량_M2"] / overview["개월수"], 0)
     overview["월평균_매출"] = np.where(overview["개월수"] > 0, overview["총매출액"] / overview["개월수"], 0)
+
+    overview_group_cols = ["품목코드", "점착제코드", "점착제명"]
+    cut_history = build_group_history_frame(
+        df[df["재단구분"].str.strip() != ""],
+        overview_group_cols,
+        "재단구분",
+        "재단구분",
+    )
+    base_width_history = build_group_history_frame(
+        df[df["기준폭"].notna()],
+        overview_group_cols,
+        "기준폭",
+        "기준폭이력",
+    )
+    if not cut_history.empty:
+        overview = overview.merge(cut_history, on=overview_group_cols, how="left")
+    else:
+        overview["재단구분"] = ""
+    if not base_width_history.empty:
+        overview = overview.merge(base_width_history, on=overview_group_cols, how="left")
+    else:
+        overview["기준폭이력"] = ""
 
     monthly_pc = (
         df.groupby(["품목코드", "거래처", "월"], dropna=False)
@@ -2231,7 +2273,7 @@ def build_customer_monthly_scale_profile(q_all):
     if df.empty:
         return pd.DataFrame(columns=["거래처", "거래처월평균매출", "거래처총개월수", "거래처총매출"])
 
-    df["거래처"] = df["거래처"].fillna("").astype(str)
+    df["거래처"] = to_text_series(df["거래처"], strip=True)
     df["금액(원)"] = pd.to_numeric(df["금액(원)"], errors="coerce").fillna(0)
     df["월"] = df["날짜"].dt.strftime("%Y-%m")
 
@@ -2276,7 +2318,7 @@ def normalize_quote_price_rules(rules_df, default_date=None, target_product_code
             work[col] = default_df[col].iloc[0]
 
     work["적용구분"] = work["적용구분"].fillna("전체").astype(str).str.strip()
-    work["적용값"] = work["적용값"].fillna("").astype(str).str.strip()
+    work["적용값"] = to_text_series(work["적용값"], strip=True)
     work["인상기준일"] = pd.to_datetime(work["인상기준일"], errors="coerce")
     work["인상률(%)"] = pd.to_numeric(work["인상률(%)"], errors="coerce").fillna(0.0)
 
@@ -2349,8 +2391,8 @@ def apply_quote_price_adjustments(work, rules_df, direct_compare_days=23, defaul
         if apply_mask.any():
             factor = 1.0 + (assigned_rate.fillna(0.0) / 100.0)
             df.loc[apply_mask, "단가보정계수"] = df.loc[apply_mask, "단가보정계수"] * factor.loc[apply_mask]
-            existing = df.loc[apply_mask, "인상반영내역"].fillna("").astype(str)
-            addition = assigned_desc.loc[apply_mask].fillna("").astype(str)
+            existing = to_text_series(df.loc[apply_mask, "인상반영내역"])
+            addition = to_text_series(assigned_desc.loc[apply_mask])
             df.loc[apply_mask, "인상반영내역"] = np.where(
                 existing.str.strip() != "",
                 existing + " / " + addition,
@@ -2410,7 +2452,7 @@ def build_new_customer_quote_recommendation(q_all, ref_detail, target_product_co
         return empty_summary, empty_reco
 
     work = ref_detail.copy()
-    work["품목코드"] = work["품목코드"].fillna("").astype(str)
+    work["품목코드"] = to_text_series(work["품목코드"], strip=True)
     work = work[work["품목코드"] == str(target_product_code)].copy()
     if work.empty:
         return empty_summary, empty_reco
@@ -2981,7 +3023,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
     all_months = sorted(df["월"].dropna().astype(str).unique().tolist())
 
     customer_summary = (
-        df.groupby("거래처", as_index=False)
+        df.groupby("거래처", as_index=False, observed=True)
         .agg(
             총매출액=("금액(원)", "sum"),
             총판매량=("수량(M2)", "sum"),
@@ -2993,7 +3035,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
     )
 
     customer_monthly = (
-        df.groupby(["거래처", "월"], as_index=False)
+        df.groupby(["거래처", "월"], as_index=False, observed=True)
         .agg(매출액=("금액(원)", "sum"))
         .sort_values(["거래처", "월"])
         .reset_index(drop=True)
@@ -3001,7 +3043,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
     customer_monthly["날짜축"] = pd.to_datetime(customer_monthly["월"] + "-01", errors="coerce")
 
     customer_item_monthly = (
-        df.groupby(["거래처", "품목표시", "월"], as_index=False)
+        df.groupby(["거래처", "품목표시", "월"], as_index=False, observed=True)
         .agg(
             매출액=("금액(원)", "sum"),
             판매량=("수량(M2)", "sum"),
@@ -3012,7 +3054,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
     customer_item_monthly["날짜축"] = pd.to_datetime(customer_item_monthly["월"] + "-01", errors="coerce")
 
     item_summary = (
-        df.groupby(["거래처", "품목표시"], as_index=False)
+        df.groupby(["거래처", "품목표시"], as_index=False, observed=True)
         .agg(
             총매출액=("금액(원)", "sum"),
             총판매량=("수량(M2)", "sum"),
@@ -3025,7 +3067,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
     if not customer_item_monthly.empty:
         base_map = (
             customer_item_monthly.sort_values(["거래처", "품목표시", "월"])
-            .groupby(["거래처", "품목표시"], as_index=False)
+            .groupby(["거래처", "품목표시"], as_index=False, observed=True)
             .first()[["거래처", "품목표시", "매출액"]]
             .rename(columns={"매출액": "기준월매출"})
         )
@@ -3034,14 +3076,14 @@ def build_customer_sales_analysis(q, selected_end_month=None):
                 customer_item_monthly[
                     customer_item_monthly["월"].astype(str) == str(selected_end_month)
                 ]
-                .groupby(["거래처", "품목표시"], as_index=False)["매출액"]
+                .groupby(["거래처", "품목표시"], as_index=False, observed=True)["매출액"]
                 .sum()
                 .rename(columns={"매출액": "최근월매출"})
             )
         else:
             last_map = (
                 customer_item_monthly.sort_values(["거래처", "품목표시", "월"])
-                .groupby(["거래처", "품목표시"], as_index=False)
+                .groupby(["거래처", "품목표시"], as_index=False, observed=True)
                 .last()[["거래처", "품목표시", "매출액"]]
                 .rename(columns={"매출액": "최근월매출"})
             )
@@ -3053,14 +3095,14 @@ def build_customer_sales_analysis(q, selected_end_month=None):
 
     recent_price = (
         df.sort_values("날짜")
-        .groupby(["거래처", "품목표시"], as_index=False)
+        .groupby(["거래처", "품목표시"], as_index=False, observed=True)
         .tail(1)[["거래처", "품목표시", "단가(원/M2)"]]
         .rename(columns={"단가(원/M2)": "최근단가"})
     )
     item_summary = item_summary.merge(recent_price, on=["거래처", "품목표시"], how="left")
 
     width_hist = (
-        df.groupby(["거래처", "품목표시"], as_index=False)["가로폭(mm)"]
+        df.groupby(["거래처", "품목표시"], as_index=False, observed=True)["가로폭(mm)"]
         .apply(lambda s: ", ".join([
             str(int(v)) if pd.notna(v) and float(v).is_integer() else str(v)
             for v in pd.Series(s).dropna().unique()
@@ -3715,7 +3757,7 @@ lazy_tab_labels = [
     "📈 매출 증가 품목 분석",
     "원자료",
 ]
-lazy_tabs_enabled = st.sidebar.toggle("고속 모드(선택 탭만 계산)", value=False, help="켜면 선택한 탭만 무거운 계산을 실행하여 속도를 높입니다.")
+lazy_tabs_enabled = st.sidebar.toggle("고속 모드(선택 탭만 계산)", value=True, help="켜면 선택한 탭만 무거운 계산을 실행하여 속도를 높입니다.")
 lazy_active_tab = st.sidebar.selectbox("고속 모드 계산 대상", options=lazy_tab_labels, index=0) if lazy_tabs_enabled else None
 
 q_quote_scope = apply_filters(
@@ -3767,7 +3809,7 @@ with tab1:
 
                 for c in ["거래처", "품목코드", "점착제코드", "점착제명", "재단구분"]:
                     if c in q1.columns:
-                        q1[c] = q1[c].fillna("").astype(str)
+                        q1[c] = to_text_series(q1[c])
 
                 key_cols = [c for c in ["거래처", "품목코드", "점착제코드", "점착제명"] if c in q1.columns]
                 history_group_cols = [c for c in ["거래처", "품목코드"] if c in q1.columns]
@@ -3850,7 +3892,7 @@ with tab2:
 
                 for c in ["거래처", "품목코드"]:
                     if c in q2.columns:
-                        q2[c] = q2[c].fillna("").astype(str)
+                        q2[c] = to_text_series(q2[c])
 
                 key_cols = [c for c in ["품목코드", "거래처"] if c in q2.columns]
                 latest_info = build_filtered_recent_snapshot(q2, key_cols, include_width_history=False)
@@ -3919,9 +3961,9 @@ with tab_new:
             if pd.notna(recent_end_dt):
                 recent_start_dt = recent_end_dt - pd.DateOffset(months=6)
                 if "날짜" in q_recent.columns:
+                    recent_dates = pd.to_datetime(q_recent["날짜"], errors="coerce")
                     q_recent = q_recent[
-                        (pd.to_datetime(q_recent["날짜"], errors="coerce") >= recent_start_dt) &
-                        (pd.to_datetime(q_recent["날짜"], errors="coerce") <= recent_end_dt)
+                        recent_dates.between(recent_start_dt, recent_end_dt, inclusive="both")
                     ]
 
             if "단가(원/M2)" in q_recent.columns:
@@ -3957,7 +3999,7 @@ with tab_new:
                         if col_name not in q_recent_search.columns:
                             q_recent_search[col_name] = ""
                         q_recent_search = q_recent_search[
-                            q_recent_search[col_name].fillna("").astype(str).str.contains(normalized_kw, case=False, na=False)
+                            to_text_series(q_recent_search[col_name]).str.contains(normalized_kw, case=False, na=False)
                         ]
 
                 period_label = "기간 정보 없음"
@@ -3970,7 +4012,7 @@ with tab_new:
                 else:
                     recent_overview, _, _, _ = build_quote_reference(q_recent_search)
                     overview_cols = [
-                        "품목코드", "점착제코드", "최저단가", "최고단가", "거래처수",
+                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "최저단가", "최고단가", "거래처수",
                         "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                     ]
                     overview_cols = [c for c in overview_cols if c in recent_overview.columns]
@@ -3978,11 +4020,13 @@ with tab_new:
                     clean_and_safe_display(
                         recent_overview[overview_cols] if overview_cols else pd.DataFrame(),
                         pinned_cols=["품목코드"],
-                        text_cols=["품목코드", "점착제코드"],
+                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력"],
                         height=None,
                         column_width_overrides={
                             "품목코드": 165,
                             "점착제코드": 90,
+                            "재단구분": 90,
+                            "기준폭이력": 120,
                             "최저단가": 70,
                             "최고단가": 70,
                             "거래처수": 70,
@@ -4015,7 +4059,7 @@ with tab3:
 
                 st.markdown("### 1) 품목 기준 견적 레퍼런스")
                 overview_cols = [
-                    "품목코드", "점착제코드", "최저단가", "최고단가", "거래처수",
+                    "품목코드", "점착제코드", "재단구분", "기준폭이력", "최저단가", "최고단가", "거래처수",
                     "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                 ]
                 overview_cols = [c for c in overview_cols if c in overview.columns]
@@ -4023,11 +4067,13 @@ with tab3:
                 clean_and_safe_display(
                     overview[overview_cols] if overview_cols else pd.DataFrame(),
                     pinned_cols=["품목코드"],
-                    text_cols=["품목코드", "점착제코드"],
+                    text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력"],
                     height=None,
                     column_width_overrides={
                         "품목코드": 145,
                         "점착제코드": 75,
+                        "재단구분": 80,
+                        "기준폭이력": 100,
                         "최저단가": 55,
                         "최고단가": 55,
                         "거래처수": 30,
@@ -4270,7 +4316,7 @@ with tab3:
                             "활용 레퍼런스 수 (Top N)",
                             min_value=3,
                             max_value=20,
-                            value=12,
+                            value=15,
                             step=1,
                             key=top_n_key,
                             help="추천 기준단가 산정에 활용할 상위 유사 레퍼런스 개수. 적을수록 유사도 높은 거래처만 활용, 많을수록 분위수 안정성 향상."
