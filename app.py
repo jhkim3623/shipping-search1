@@ -3759,6 +3759,7 @@ lazy_tab_labels = [
 ]
 lazy_tabs_enabled = st.sidebar.toggle("고속 모드(선택 탭만 계산)", value=True, help="켜면 선택한 탭만 무거운 계산을 실행하여 속도를 높입니다.")
 lazy_active_tab = st.sidebar.selectbox("고속 모드 계산 대상", options=lazy_tab_labels, index=0) if lazy_tabs_enabled else None
+main_tab_default = lazy_active_tab if lazy_tabs_enabled and lazy_active_tab in lazy_tab_labels else None
 
 q_quote_scope = apply_filters(
     rec,
@@ -3779,19 +3780,10 @@ q = apply_filters(
 
 st.sidebar.caption(f"현재 필터 결과: {len(q):,}건")
 
-tab1, tab2, tab_new, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs([
-    "거래처별 검색",
-    "품목별 검색",
-    "🔎 품목 검색",
-    "🏷️ 견적 레퍼런스",
-    "📉 매출 하락 분석",
-    "📈 매출 상승 분석",
-    "📊 거래처별 매출 분석",
-    "📊 거래처통합분석",
-    "📉 매출 감소 품목 분석",
-    "📈 매출 증가 품목 분석",
-    "원자료",
-])
+tab1, tab2, tab_new, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs(
+    lazy_tab_labels,
+    default=main_tab_default,
+)
 
 with tab1:
     if lazy_tabs_enabled and lazy_active_tab != "거래처별 검색":
