@@ -3247,7 +3247,7 @@ def build_customer_sales_analysis(q, selected_end_month=None):
         first_half = all_months[:mid_idx] if mid_idx > 0 else [all_months[0]]
         last_half = all_months[mid_idx:] if mid_idx < len(all_months) else [all_months[-1]]
 
-        grouped = customer_item_monthly.groupby(["거래처", "품목표시"], dropna=False)
+        grouped = customer_item_monthly.groupby(["거래처", "품목표시"], dropna=False, observed=True)
         for (cust_name, item_name), g in grouped:
             g = g.sort_values("월").copy()
             first_vals = g[g["월"].isin(first_half)]["매출액"]
@@ -3757,8 +3757,8 @@ if sdate is not None and edate is not None:
 st.sidebar.markdown("---")
 st.sidebar.caption("💡 견적 레퍼런스: 품목코드·점착제코드·기간 필터 위주로 사용하세요.")
 lazy_tab_labels = [
-    "거래처별 검색",
-    "품목별 검색",
+    "👥 거래처별 검색",
+    "📦 품목별 검색",
     "🔎 품목 검색",
     "🏷️ 견적 레퍼런스",
     "📉 매출 하락 분석",
@@ -3767,40 +3767,61 @@ lazy_tab_labels = [
     "📊 거래처통합분석",
     "📉 매출 감소 품목 분석",
     "📈 매출 증가 품목 분석",
-    "원자료",
+    "🗂️ 원자료",
 ]
-default_nav_tab = "거래처별 검색"
+default_nav_tab = "👥 거래처별 검색"
+
+
+def _sync_from_sidebar_tab():
+    selected = st.session_state.get("lazy_active_tab", default_nav_tab)
+    if selected not in lazy_tab_labels:
+        selected = default_nav_tab
+    st.session_state["active_main_tab"] = selected
+    st.session_state["main_tab_value"] = selected
+
+
+def _sync_from_main_tab():
+    selected = st.session_state.get("main_tab_value", default_nav_tab)
+    if selected not in lazy_tab_labels:
+        selected = default_nav_tab
+    st.session_state["active_main_tab"] = selected
+    if st.session_state.get("lazy_tabs_enabled", True):
+        st.session_state["lazy_active_tab"] = selected
+
+
 initialize_filter_state("active_main_tab", default_nav_tab)
 if st.session_state.get("active_main_tab") not in lazy_tab_labels:
     st.session_state["active_main_tab"] = default_nav_tab
+current_active_tab = st.session_state.get("active_main_tab", default_nav_tab)
+st.session_state["main_tab_value"] = current_active_tab
+st.session_state["lazy_active_tab"] = current_active_tab
 
-lazy_tabs_enabled = st.sidebar.toggle("고속 모드(선택 탭만 계산)", value=True, help="켜면 선택한 탭만 무거운 계산을 실행하여 속도를 높입니다.")
+st.sidebar.toggle(
+    "고속 모드(선택 탭만 계산)",
+    value=True,
+    key="lazy_tabs_enabled",
+    help="켜면 선택한 탭만 무거운 계산을 실행하여 속도를 높입니다.",
+)
+lazy_tabs_enabled = st.session_state.get("lazy_tabs_enabled", True)
 if lazy_tabs_enabled:
-    lazy_index = lazy_tab_labels.index(st.session_state.get("active_main_tab", default_nav_tab)) if st.session_state.get("active_main_tab", default_nav_tab) in lazy_tab_labels else 0
-    lazy_active_tab = st.sidebar.selectbox("고속 모드 계산 대상", options=lazy_tab_labels, index=lazy_index, key="lazy_active_tab")
-    if lazy_active_tab != st.session_state.get("active_main_tab"):
-        st.session_state["active_main_tab"] = lazy_active_tab
-        st.rerun()
+    st.sidebar.selectbox(
+        "고속 모드 계산 대상",
+        options=lazy_tab_labels,
+        key="lazy_active_tab",
+        on_change=_sync_from_sidebar_tab,
+    )
 else:
-    lazy_active_tab = st.session_state.get("active_main_tab", default_nav_tab)
-    st.session_state["lazy_active_tab"] = lazy_active_tab
+    st.session_state["lazy_active_tab"] = current_active_tab
 
-main_tab_widget_key = f"main_tab_picker_{st.session_state.get('active_main_tab', default_nav_tab)}" if lazy_tabs_enabled else "main_tab_picker"
-selected_main_tab = st.pills(
+st.pills(
     "메인 탭",
     options=lazy_tab_labels,
     selection_mode="single",
-    default=st.session_state.get("active_main_tab", default_nav_tab),
-    key=main_tab_widget_key,
+    key="main_tab_value",
+    on_change=_sync_from_main_tab,
 )
-if selected_main_tab is None:
-    selected_main_tab = st.session_state.get("active_main_tab", default_nav_tab)
-if selected_main_tab != st.session_state.get("active_main_tab"):
-    st.session_state["active_main_tab"] = selected_main_tab
-    if lazy_tabs_enabled:
-        st.session_state["lazy_active_tab"] = selected_main_tab
-    st.rerun()
-active_main_tab = st.session_state.get("active_main_tab", default_nav_tab)
+active_main_tab = st.session_state.get("active_main_tab", current_active_tab)
+lazy_active_tab = st.session_state.get("lazy_active_tab", active_main_tab)
 
 q_quote_scope = apply_filters(
     rec,
@@ -3821,8 +3842,8 @@ q = apply_filters(
 
 st.sidebar.caption(f"현재 필터 결과: {len(q):,}건")
 
-if active_main_tab == "거래처별 검색":
-    if lazy_tabs_enabled and lazy_active_tab != "거래처별 검색":
+if active_main_tab == "👥 거래처별 검색":
+    if lazy_tabs_enabled and lazy_active_tab != "👥 거래처별 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
             st.subheader("거래처별 → 품목별 출고 이력/최근 단가/가로폭")
@@ -3904,8 +3925,8 @@ if active_main_tab == "거래처별 검색":
                     },
                 )
 
-if active_main_tab == "품목별 검색":
-    if lazy_tabs_enabled and lazy_active_tab != "품목별 검색":
+if active_main_tab == "📦 품목별 검색":
+    if lazy_tabs_enabled and lazy_active_tab != "📦 품목별 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
             st.subheader("품목별 → 거래처별 출고 이력/총량/단가/매출")
@@ -3970,7 +3991,7 @@ if active_main_tab == "🔎 품목 검색":
     if lazy_tabs_enabled and lazy_active_tab != "🔎 품목 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
-            st.subheader("🔎 품목 검색 — 최근 6개월 품목 기준 견적 레퍼런스")
+            st.subheader("🔎 품목 검색 — 최근 6개월 데이터 기준")
 
             q_recent = rec.copy()
             if dept_col and sel_dept:
@@ -6705,8 +6726,8 @@ if active_main_tab == "📈 매출 증가 품목 분석":
                         else:
                             st.info("업체별 증가현황 데이터가 없습니다.")
 
-if active_main_tab == "원자료":
-    if lazy_tabs_enabled and lazy_active_tab != "원자료":
+if active_main_tab == "🗂️ 원자료":
+    if lazy_tabs_enabled and lazy_active_tab != "🗂️ 원자료":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
             st.subheader("원자료(필터 적용됨)")
@@ -6718,8 +6739,27 @@ if active_main_tab == "원자료":
             raw_cols = [c for c in raw_priority_cols if c in q.columns and c != "품목명(공식)"]
             raw_cols += [c for c in q.columns if c not in raw_cols and c != "품목명(공식)"]
 
+            raw_display_df = q[raw_cols].copy()
+            if "날짜" in raw_display_df.columns:
+                raw_display_df = raw_display_df.sort_values("날짜", ascending=False)
+            raw_total_rows = len(raw_display_df)
+            raw_preview_limit = 5000
+            if raw_total_rows > raw_preview_limit:
+                st.caption(f"속도 최적화를 위해 상위 {raw_preview_limit:,}행만 표시합니다. 전체 {raw_total_rows:,}행은 CSV로 내려받을 수 있습니다.")
+                raw_csv = raw_display_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                st.download_button(
+                    "📥 원자료 전체 CSV 다운로드",
+                    data=raw_csv,
+                    file_name="원자료_필터결과.csv",
+                    mime="text/csv",
+                    key="download_raw_data_csv",
+                )
+                raw_display_df = raw_display_df.head(raw_preview_limit)
+            else:
+                st.caption(f"필터 적용 원자료 {raw_total_rows:,}행")
+
             clean_and_safe_display(
-                q[raw_cols],
+                raw_display_df,
                 pinned_cols=["거래처", "품목코드"],
                 text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "가로폭이력", "최근날짜", "월", "비고", "담당부서", "영업담당부서", "담당자"],
                 column_width_overrides={
