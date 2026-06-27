@@ -3759,7 +3759,8 @@ lazy_tab_labels = [
 ]
 lazy_tabs_enabled = st.sidebar.toggle("고속 모드(선택 탭만 계산)", value=True, help="켜면 선택한 탭만 무거운 계산을 실행하여 속도를 높입니다.")
 lazy_active_tab = st.sidebar.selectbox("고속 모드 계산 대상", options=lazy_tab_labels, index=0) if lazy_tabs_enabled else None
-main_tab_default = lazy_active_tab if lazy_tabs_enabled and lazy_active_tab in lazy_tab_labels else None
+main_tab_default = lazy_active_tab if lazy_tabs_enabled and lazy_active_tab in lazy_tab_labels else lazy_tab_labels[0]
+main_tab_key = f"main_tabs__{main_tab_default}" if lazy_tabs_enabled else "main_tabs"
 
 q_quote_scope = apply_filters(
     rec,
@@ -3783,6 +3784,7 @@ st.sidebar.caption(f"현재 필터 결과: {len(q):,}건")
 tab1, tab2, tab_new, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs(
     lazy_tab_labels,
     default=main_tab_default,
+    key=main_tab_key,
 )
 
 with tab1:
