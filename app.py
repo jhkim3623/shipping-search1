@@ -748,6 +748,16 @@ def set_filter_state_pair(applied_key, widget_key, value):
         st.session_state[applied_key] = value
 
 
+def get_default_filter_start_date(date_min=None, date_max=None):
+    if date_max is None or pd.isna(date_max):
+        return date_min.date() if date_min is not None and pd.notna(date_min) else None
+    month_anchor = pd.Timestamp(date_max).replace(day=1)
+    default_start = (month_anchor - pd.DateOffset(months=13)).date()
+    if date_min is not None and pd.notna(date_min):
+        return max(date_min.date(), default_start)
+    return default_start
+
+
 def reset_filter_state_defaults(date_min=None, date_max=None):
     st.session_state["flt_sel_dept"] = []
     st.session_state["flt_sel_manager"] = []
@@ -761,9 +771,10 @@ def reset_filter_state_defaults(date_min=None, date_max=None):
     st.session_state["flt_widget_sel_adh"] = []
     st.session_state["flt_prod_option_query"] = ""
     st.session_state["flt_adh_option_query"] = ""
-    if date_min is not None and pd.notna(date_min):
-        st.session_state["flt_start_date"] = date_min.date()
-        st.session_state["flt_widget_start_date"] = date_min.date()
+    default_start_date = get_default_filter_start_date(date_min, date_max)
+    if default_start_date is not None:
+        st.session_state["flt_start_date"] = default_start_date
+        st.session_state["flt_widget_start_date"] = default_start_date
     if date_max is not None and pd.notna(date_max):
         st.session_state["flt_end_date"] = date_max.date()
         st.session_state["flt_widget_end_date"] = date_max.date()
@@ -2645,7 +2656,7 @@ def build_return_decline_item_analysis(q):
     last_half = all_months[mid_idx:] if mid_idx < len(all_months) else [all_months[-1]]
 
     item_monthly = (
-        df.groupby(["품목코드", "품목표시", "월"], dropna=False)
+        df.groupby(["품목코드", "품목표시", "월"], dropna=False, observed=True)
         .agg(
             매출액=("금액(원)", "sum"),
             출고량=("수량(M2)", "sum"),
@@ -2657,7 +2668,7 @@ def build_return_decline_item_analysis(q):
     item_monthly["날짜축"] = pd.to_datetime(item_monthly["월"] + "-01", errors="coerce")
 
     item_customer_monthly = (
-        df.groupby(["품목코드", "품목표시", "거래처", "월"], dropna=False)
+        df.groupby(["품목코드", "품목표시", "거래처", "월"], dropna=False, observed=True)
         .agg(
             매출액=("금액(원)", "sum"),
             출고량=("수량(M2)", "sum"),
@@ -2809,7 +2820,7 @@ def build_growth_item_analysis(q):
     month_progress_ratio, latest_dt, month_end = get_month_progress_ratio_from_df(df, "날짜")
 
     item_monthly = (
-        df.groupby(["품목코드", "품목표시", "월"], dropna=False)
+        df.groupby(["품목코드", "품목표시", "월"], dropna=False, observed=True)
         .agg(
             매출액=("금액(원)", "sum"),
             출고량=("수량(M2)", "sum"),
@@ -2821,7 +2832,7 @@ def build_growth_item_analysis(q):
     item_monthly["날짜축"] = pd.to_datetime(item_monthly["월"] + "-01", errors="coerce")
 
     item_customer_monthly = (
-        df.groupby(["품목코드", "품목표시", "거래처", "월"], dropna=False)
+        df.groupby(["품목코드", "품목표시", "거래처", "월"], dropna=False, observed=True)
         .agg(
             매출액=("금액(원)", "sum"),
             출고량=("수량(M2)", "sum"),
@@ -3592,14 +3603,15 @@ dept_options, manager_options, cust_options, prod_options, adh_options, date_min
     dept_col=dept_col,
     manager_col=manager_col,
 )
+default_start_date = get_default_filter_start_date(date_min, date_max)
 
 initialize_filter_state("flt_sel_dept", [])
 initialize_filter_state("flt_sel_manager", [])
 initialize_filter_state("flt_sel_cust", [])
 initialize_filter_state("flt_sel_prod", [])
 initialize_filter_state("flt_sel_adh", [])
-if date_min is not None and pd.notna(date_min):
-    initialize_filter_state("flt_start_date", date_min.date())
+if default_start_date is not None:
+    initialize_filter_state("flt_start_date", default_start_date)
 if date_max is not None and pd.notna(date_max):
     initialize_filter_state("flt_end_date", date_max.date())
 
@@ -3611,7 +3623,7 @@ initialize_filter_state("flt_widget_sel_adh", sanitize_multiselect_state(st.sess
 initialize_filter_state("flt_prod_option_query", "")
 initialize_filter_state("flt_adh_option_query", "")
 if date_min is not None and pd.notna(date_min):
-    initialize_filter_state("flt_widget_start_date", sanitize_date_state(st.session_state.get("flt_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None))
+    initialize_filter_state("flt_widget_start_date", sanitize_date_state(st.session_state.get("flt_start_date", default_start_date if default_start_date is not None else date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None))
 if date_max is not None and pd.notna(date_max):
     initialize_filter_state("flt_widget_end_date", sanitize_date_state(st.session_state.get("flt_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date()))
 
@@ -3631,8 +3643,8 @@ st.session_state["flt_widget_sel_cust"] = sanitize_multiselect_state(st.session_
 st.session_state["flt_widget_sel_prod"] = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_prod", []), prod_options)
 st.session_state["flt_widget_sel_adh"] = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_adh", []), adh_options)
 if date_min is not None and pd.notna(date_min):
-    st.session_state["flt_start_date"] = sanitize_date_state(st.session_state.get("flt_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None)
-    st.session_state["flt_widget_start_date"] = sanitize_date_state(st.session_state.get("flt_widget_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None)
+    st.session_state["flt_start_date"] = sanitize_date_state(st.session_state.get("flt_start_date", default_start_date if default_start_date is not None else date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None)
+    st.session_state["flt_widget_start_date"] = sanitize_date_state(st.session_state.get("flt_widget_start_date", default_start_date if default_start_date is not None else date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None)
 if date_max is not None and pd.notna(date_max):
     st.session_state["flt_end_date"] = sanitize_date_state(st.session_state.get("flt_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
     st.session_state["flt_widget_end_date"] = sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
@@ -3757,10 +3769,38 @@ lazy_tab_labels = [
     "📈 매출 증가 품목 분석",
     "원자료",
 ]
+default_nav_tab = "거래처별 검색"
+initialize_filter_state("active_main_tab", default_nav_tab)
+if st.session_state.get("active_main_tab") not in lazy_tab_labels:
+    st.session_state["active_main_tab"] = default_nav_tab
+
 lazy_tabs_enabled = st.sidebar.toggle("고속 모드(선택 탭만 계산)", value=True, help="켜면 선택한 탭만 무거운 계산을 실행하여 속도를 높입니다.")
-lazy_active_tab = st.sidebar.selectbox("고속 모드 계산 대상", options=lazy_tab_labels, index=0) if lazy_tabs_enabled else None
-main_tab_default = lazy_active_tab if lazy_tabs_enabled and lazy_active_tab in lazy_tab_labels else lazy_tab_labels[0]
-main_tab_key = f"main_tabs__{main_tab_default}" if lazy_tabs_enabled else "main_tabs"
+if lazy_tabs_enabled:
+    lazy_index = lazy_tab_labels.index(st.session_state.get("active_main_tab", default_nav_tab)) if st.session_state.get("active_main_tab", default_nav_tab) in lazy_tab_labels else 0
+    lazy_active_tab = st.sidebar.selectbox("고속 모드 계산 대상", options=lazy_tab_labels, index=lazy_index, key="lazy_active_tab")
+    if lazy_active_tab != st.session_state.get("active_main_tab"):
+        st.session_state["active_main_tab"] = lazy_active_tab
+        st.rerun()
+else:
+    lazy_active_tab = st.session_state.get("active_main_tab", default_nav_tab)
+    st.session_state["lazy_active_tab"] = lazy_active_tab
+
+main_tab_widget_key = f"main_tab_picker_{st.session_state.get('active_main_tab', default_nav_tab)}" if lazy_tabs_enabled else "main_tab_picker"
+selected_main_tab = st.pills(
+    "메인 탭",
+    options=lazy_tab_labels,
+    selection_mode="single",
+    default=st.session_state.get("active_main_tab", default_nav_tab),
+    key=main_tab_widget_key,
+)
+if selected_main_tab is None:
+    selected_main_tab = st.session_state.get("active_main_tab", default_nav_tab)
+if selected_main_tab != st.session_state.get("active_main_tab"):
+    st.session_state["active_main_tab"] = selected_main_tab
+    if lazy_tabs_enabled:
+        st.session_state["lazy_active_tab"] = selected_main_tab
+    st.rerun()
+active_main_tab = st.session_state.get("active_main_tab", default_nav_tab)
 
 q_quote_scope = apply_filters(
     rec,
@@ -3781,13 +3821,7 @@ q = apply_filters(
 
 st.sidebar.caption(f"현재 필터 결과: {len(q):,}건")
 
-tab1, tab2, tab_new, tab3, tab4, tab4b, tab5, tab5b, tab6, tab6b, tab7 = st.tabs(
-    lazy_tab_labels,
-    default=main_tab_default,
-    key=main_tab_key,
-)
-
-with tab1:
+if active_main_tab == "거래처별 검색":
     if lazy_tabs_enabled and lazy_active_tab != "거래처별 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -3870,7 +3904,7 @@ with tab1:
                     },
                 )
 
-with tab2:
+if active_main_tab == "품목별 검색":
     if lazy_tabs_enabled and lazy_active_tab != "품목별 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -3932,7 +3966,7 @@ with tab2:
                     },
                 )
 
-with tab_new:
+if active_main_tab == "🔎 품목 검색":
     if lazy_tabs_enabled and lazy_active_tab != "🔎 품목 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -4032,7 +4066,7 @@ with tab_new:
                         },
                     )
 
-with tab3:
+if active_main_tab == "🏷️ 견적 레퍼런스":
     if lazy_tabs_enabled and lazy_active_tab != "🏷️ 견적 레퍼런스":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -4407,7 +4441,7 @@ with tab3:
                                 key="download_new_quote_reference_csv",
                             )
 
-with tab4:
+if active_main_tab == "📉 매출 하락 분석":
     if lazy_tabs_enabled and lazy_active_tab != "📉 매출 하락 분석":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -4789,7 +4823,7 @@ with tab4:
                                 )
                                 render_plotly_chart(fig_bar, use_container_width=True, key=f"tab4_compare_{selected_cust_name}")
 
-with tab4b:
+if active_main_tab == "📈 매출 상승 분석":
     if lazy_tabs_enabled and lazy_active_tab != "📈 매출 상승 분석":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -5150,7 +5184,7 @@ with tab4b:
                                 )
                                 render_plotly_chart(fig_bar, use_container_width=True, key=f"tab4b_compare_{selected_cust_name}")
 
-with tab5:
+if active_main_tab == "📊 거래처별 매출 분석":
     if lazy_tabs_enabled and lazy_active_tab != "📊 거래처별 매출 분석":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -5468,7 +5502,7 @@ with tab5:
                         else:
                             st.info("해당 업체의 품목별 분석 데이터가 없습니다.")
 
-with tab5b:
+if active_main_tab == "📊 거래처통합분석":
     if lazy_tabs_enabled and lazy_active_tab != "📊 거래처통합분석":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -5780,7 +5814,7 @@ with tab5b:
                     else:
                         st.info("통합 품목별 분석 데이터가 없습니다.")
 
-with tab6:
+if active_main_tab == "📉 매출 감소 품목 분석":
     if lazy_tabs_enabled and lazy_active_tab != "📉 매출 감소 품목 분석":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -6167,7 +6201,7 @@ with tab6:
                         else:
                             st.info("업체별 감소현황 데이터가 없습니다.")
 
-with tab6b:
+if active_main_tab == "📈 매출 증가 품목 분석":
     if lazy_tabs_enabled and lazy_active_tab != "📈 매출 증가 품목 분석":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
@@ -6671,7 +6705,7 @@ with tab6b:
                         else:
                             st.info("업체별 증가현황 데이터가 없습니다.")
 
-with tab7:
+if active_main_tab == "원자료":
     if lazy_tabs_enabled and lazy_active_tab != "원자료":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
