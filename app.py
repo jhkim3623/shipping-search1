@@ -1748,6 +1748,46 @@ def build_cost_lookup(bom_df, raw_df):
     return bom[cols].drop_duplicates(subset=["품목코드"], keep="first")
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def build_raw_material_reference_table(raw_df):
+    cols = ["구분", "자재명", "원가(㎡)", "합지속도(mpm)", "검색키"]
+    if raw_df is None or raw_df.empty:
+        return pd.DataFrame(columns=cols)
+    raw = raw_df.copy()
+    raw.columns = [str(c).strip() for c in raw.columns]
+    mappings = [
+        ("원지", "원지", "원지원가(㎡)", None),
+        ("이형지", "이형지", "이형지 원가(㎡)", None),
+        ("점착제", "점착제", "점착제 원가(㎡)", None),
+        ("합지", "합지", "합지 원가(㎡)", "합지 속도(mpm)"),
+        ("재단", "재단", "재단 원가(㎡)", None),
+    ]
+    frames = []
+    for kind, name_col, cost_col, speed_col in mappings:
+        if name_col not in raw.columns or cost_col not in raw.columns:
+            continue
+        use_cols = [name_col, cost_col] + ([speed_col] if speed_col and speed_col in raw.columns else [])
+        tmp = raw[use_cols].copy()
+        rename_map = {name_col: "자재명", cost_col: "원가(㎡)"}
+        if speed_col and speed_col in tmp.columns:
+            rename_map[speed_col] = "합지속도(mpm)"
+        tmp = tmp.rename(columns=rename_map)
+        tmp["구분"] = kind
+        tmp["자재명"] = to_text_series(tmp["자재명"], strip=True)
+        tmp["원가(㎡)"] = pd.to_numeric(tmp["원가(㎡)"], errors="coerce")
+        if "합지속도(mpm)" not in tmp.columns:
+            tmp["합지속도(mpm)"] = np.nan
+        else:
+            tmp["합지속도(mpm)"] = pd.to_numeric(tmp["합지속도(mpm)"], errors="coerce")
+        tmp = tmp[tmp["자재명"] != ""].copy()
+        frames.append(tmp[["구분", "자재명", "원가(㎡)", "합지속도(mpm)"]])
+    if not frames:
+        return pd.DataFrame(columns=cols)
+    out = pd.concat(frames, ignore_index=True)
+    out["검색키"] = out["자재명"].map(normalize_product_search_text)
+    return out.drop_duplicates(subset=["구분", "자재명"], keep="first").sort_values(["구분", "자재명"]).reset_index(drop=True)
+
+
 @st.cache_data(show_spinner=False, max_entries=6)
 def build_item_profitability_pack(q, cost_lookup):
     if q is None or q.empty:
@@ -4043,6 +4083,7 @@ lazy_tab_labels = [
     "🏷️ 견적 레퍼런스",
     "💰 품목별 수익성",
     "🏢 업체별 수익성 시뮬레이션",
+    "🧾 원자재 원가 조회",
     "📉 매출 하락 분석",
     "📈 매출 상승 분석",
     "📊 거래처별 매출 분석",
@@ -4687,8 +4728,8 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                             ]
                             summary_main_cols = [c for c in summary_main_cols if c in reco_summary.columns]
                             summary_profit_cols = [
-                                "품목코드", "제조원가Ⅰ", "제조원가Ⅱ",
-                                "추천하한_영업이익률(%)", "추천기준_영업이익률(%)", "추천상한_영업이익률(%)"
+                                "품목코드", "추천하한_영업이익률(%)", "추천기준_영업이익률(%)", "추천상한_영업이익률(%)",
+                                "제조원가Ⅰ", "제조원가Ⅱ"
                             ]
                             summary_profit_cols = [c for c in summary_profit_cols if c in reco_summary.columns]
 
@@ -4716,31 +4757,35 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
 
                             if summary_profit_cols:
                                 st.markdown("##### 원가·영업이익률 요약")
+                                profit_summary_view = reco_summary[summary_profit_cols].copy().rename(columns={
+                                    "추천하한_영업이익률(%)": "하한 영업이익률(%)",
+                                    "추천기준_영업이익률(%)": "기준 영업이익률(%)",
+                                    "추천상한_영업이익률(%)": "상한 영업이익률(%)",
+                                })
                                 clean_and_safe_display(
-                                    reco_summary[summary_profit_cols],
+                                    profit_summary_view,
                                     pinned_cols=["품목코드"],
                                     text_cols=["품목코드"],
-                                    height=calc_table_height(reco_summary, min_rows=1, max_rows=2),
+                                    height=calc_table_height(profit_summary_view, min_rows=1, max_rows=2),
                                     column_width_overrides={
                                         "품목코드": 145,
-                                        "제조원가Ⅰ": 84,
-                                        "제조원가Ⅱ": 84,
-                                        "추천하한_영업이익률(%)": 100,
-                                        "추천기준_영업이익률(%)": 100,
-                                        "추천상한_영업이익률(%)": 100,
+                                        "하한 영업이익률(%)": 112,
+                                        "기준 영업이익률(%)": 112,
+                                        "상한 영업이익률(%)": 112,
+                                        "제조원가Ⅰ": 88,
+                                        "제조원가Ⅱ": 88,
                                     },
                                 )
 
                             st.markdown("#### 유사 레퍼런스 TOP")
                             st.caption("이익률 표기는 요청하신 예시와 동일하게 원가 대비 방식((판매단가-원가) ÷ 원가)으로 계산했습니다. 공헌이익률은 제조원가Ⅰ, 영업이익률은 제조원가Ⅱ 기준입니다.")
                             st.markdown("#### 원가 카드 (BOM_제조원가 연동)")
+                            card_columns = ["구분", "품목코드", "원지", "이형지", "점착제", "합지공정", "재단공정", "로스율", "운송판관비", "제조원가Ⅰ", "제조원가Ⅱ"]
                             if cost_row.empty:
                                 cost_display = pd.DataFrame([
                                     {
                                         "구분": "BOM구성",
                                         "품목코드": selected_quote_product,
-                                        "제조원가Ⅰ": "",
-                                        "제조원가Ⅱ": "",
                                         "원지": "",
                                         "이형지": "",
                                         "점착제": "",
@@ -4748,12 +4793,12 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                         "재단공정": "",
                                         "로스율": "",
                                         "운송판관비": "",
+                                        "제조원가Ⅰ": "",
+                                        "제조원가Ⅱ": "",
                                     },
                                     {
                                         "구분": "원가(㎡)",
                                         "품목코드": "",
-                                        "제조원가Ⅰ": "",
-                                        "제조원가Ⅱ": "",
                                         "원지": "",
                                         "이형지": "",
                                         "점착제": "",
@@ -4761,28 +4806,28 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                         "재단공정": "",
                                         "로스율": "",
                                         "운송판관비": "",
+                                        "제조원가Ⅰ": "",
+                                        "제조원가Ⅱ": "",
                                     },
-                                ])
+                                ], columns=card_columns)
                             else:
                                 cost_display = pd.DataFrame([
                                     {
                                         "구분": "BOM구성",
                                         "품목코드": selected_quote_product,
-                                        "제조원가Ⅰ": _fmt_value(cost_info.get("제조원가Ⅰ(㎡)"), 1),
-                                        "제조원가Ⅱ": _fmt_value(cost_info.get("제조원가Ⅱ(㎡)"), 1),
                                         "원지": cost_info.get("원지", ""),
                                         "이형지": cost_info.get("이형지", ""),
                                         "점착제": cost_info.get("점착제", ""),
                                         "합지공정": cost_info.get("합지공정", ""),
                                         "재단공정": cost_info.get("재단공정", ""),
                                         "로스율": _fmt_pct((float(cost_info.get("로스율", np.nan)) * 100.0) if pd.notna(cost_info.get("로스율", np.nan)) else np.nan),
-                                        "운송판관비": _fmt_value(cost_info.get("운송판관비"), 1),
+                                        "운송판관비": "",
+                                        "제조원가Ⅰ": "",
+                                        "제조원가Ⅱ": "",
                                     },
                                     {
                                         "구분": "원가(㎡)",
                                         "품목코드": "",
-                                        "제조원가Ⅰ": "",
-                                        "제조원가Ⅱ": "",
                                         "원지": _fmt_value(cost_info.get("원지원가"), 1),
                                         "이형지": _fmt_value(cost_info.get("이형지원가"), 1),
                                         "점착제": _fmt_value(cost_info.get("점착제원가"), 1),
@@ -4790,8 +4835,10 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                         "재단공정": _fmt_value(cost_info.get("재단원가"), 1),
                                         "로스율": _fmt_value(cost_info.get("로스원가"), 1),
                                         "운송판관비": _fmt_value(cost_info.get("운송판관비"), 1),
+                                        "제조원가Ⅰ": _fmt_value(cost_info.get("제조원가Ⅰ(㎡)"), 1),
+                                        "제조원가Ⅱ": _fmt_value(cost_info.get("제조원가Ⅱ(㎡)"), 1),
                                     },
-                                ])
+                                ], columns=card_columns)
                             clean_and_safe_display(
                                 cost_display,
                                 pinned_cols=["구분", "품목코드"],
@@ -4800,8 +4847,6 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                 column_width_overrides={
                                     "구분": 80,
                                     "품목코드": 145,
-                                    "제조원가Ⅰ": 84,
-                                    "제조원가Ⅱ": 84,
                                     "원지": 88,
                                     "이형지": 88,
                                     "점착제": 88,
@@ -4809,6 +4854,8 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                     "재단공정": 88,
                                     "로스율": 84,
                                     "운송판관비": 88,
+                                    "제조원가Ⅰ": 84,
+                                    "제조원가Ⅱ": 84,
                                 },
                             )
 
@@ -4877,6 +4924,72 @@ if active_main_tab == "💰 품목별 수익성":
             selected_item_profit = st.selectbox("수익성을 확인할 품목", options=product_options, key="item_profit_select")
             show_df = item_profit_df[item_profit_df["품목표시"].astype(str) == str(selected_item_profit)].copy()
             show_df = show_df.sort_values(["매출액", "거래처"], ascending=[False, True]).reset_index(drop=True)
+            selected_item_code = str(show_df["품목코드"].dropna().astype(str).iloc[0]) if (not show_df.empty and "품목코드" in show_df.columns) else ""
+            default_rule_date = pd.Timestamp("2026-04-15")
+            recent_dt = pd.to_datetime(show_df.get("최근날짜"), errors="coerce") if "최근날짜" in show_df.columns else pd.Series(dtype="datetime64[ns]")
+            need_adjust_ui = bool((recent_dt.notna() & (recent_dt <= default_rule_date)).any()) if not show_df.empty else False
+            use_price_adjustment = True
+            item_price_rule_df = build_default_quote_price_rules(default_date=default_rule_date, target_product_code=selected_item_code)
+            if need_adjust_ui:
+                ctl_col, info_col = st.columns([0.32, 0.68])
+                with ctl_col:
+                    use_price_adjustment = st.toggle(
+                        "단가 인상 반영",
+                        value=True,
+                        key=f"item_profit_use_price_adjustment_{selected_item_code}",
+                        help="ON이면 최근단가와 단가인상기준일을 비교해 레퍼런스단가로 수익성을 계산합니다.",
+                    )
+                with info_col:
+                    st.caption(
+                        f"기준일 {default_rule_date.strftime('%Y-%m-%d')} 이전 최근단가가 있는 거래처만 보정합니다. 모두 기준일 이후면 이 설정은 자동으로 숨겨집니다."
+                    )
+                if use_price_adjustment:
+                    item_rule_display = item_price_rule_df.copy()
+                    if "인상기준일" in item_rule_display.columns:
+                        parsed_item_dates = pd.to_datetime(item_rule_display["인상기준일"], errors="coerce")
+                        item_rule_display["인상기준일"] = parsed_item_dates.apply(lambda x: x.date() if pd.notna(x) else None)
+                    item_price_rule_df = st.data_editor(
+                        item_rule_display,
+                        key=f"item_profit_price_rule_editor_{selected_item_code}",
+                        use_container_width=True,
+                        hide_index=True,
+                        num_rows="dynamic",
+                        height=92,
+                        column_config={
+                            "적용구분": st.column_config.SelectboxColumn("적용구분", options=["품목코드", "점착제코드", "품목명키워드", "전체"], width="small"),
+                            "적용값": st.column_config.TextColumn("적용값", width="medium"),
+                            "인상기준일": st.column_config.DateColumn("인상기준일", format="YYYY/MM/DD", width="small"),
+                            "인상률(%)": st.column_config.NumberColumn("인상률(%)", format="%.2f", width="small"),
+                        },
+                        column_order=["적용구분", "적용값", "인상기준일", "인상률(%)"],
+                    )
+            if not show_df.empty:
+                meta_cols = [c for c in ["품목코드", "거래처", "점착제코드", "품목명(공식)"] if c in q.columns]
+                if meta_cols and {"품목코드", "거래처"}.issubset(set(meta_cols)):
+                    meta_scope = q[q["품목코드"].astype(str) == selected_item_code].copy()
+                    if "날짜" in meta_scope.columns:
+                        meta_scope["날짜"] = pd.to_datetime(meta_scope["날짜"], errors="coerce")
+                        meta_scope = meta_scope.sort_values("날짜")
+                    meta_df = meta_scope.groupby(["품목코드", "거래처"], as_index=False).tail(1)[meta_cols]
+                    show_df = show_df.merge(meta_df, on=["품목코드", "거래처"], how="left")
+                if use_price_adjustment:
+                    show_df = apply_quote_price_adjustments(
+                        show_df,
+                        rules_df=item_price_rule_df,
+                        default_date=default_rule_date,
+                        target_product_code=selected_item_code,
+                    )
+                else:
+                    show_df["레퍼런스단가"] = pd.to_numeric(show_df.get("최근단가"), errors="coerce")
+                    show_df["단가인상기준일"] = ""
+                    show_df["적용인상률(%)"] = 0.0
+                    show_df["비교판정"] = "최근단가 그대로 사용"
+                show_df["레퍼런스단가"] = pd.to_numeric(show_df.get("레퍼런스단가"), errors="coerce")
+                show_df["최근단가"] = pd.to_numeric(show_df.get("최근단가"), errors="coerce")
+                show_df["판단기준단가"] = show_df["레퍼런스단가"].where(show_df["레퍼런스단가"].notna(), show_df["최근단가"])
+                show_df["공헌이익률(%)"] = show_df.apply(lambda r: _margin_ratio(r.get("판단기준단가"), r.get("제조원가Ⅰ(㎡)")), axis=1)
+                show_df["영업이익률(%)"] = show_df.apply(lambda r: _margin_ratio(r.get("판단기준단가"), r.get("제조원가Ⅱ(㎡)")), axis=1)
+                show_df["예상영업이익(원)"] = show_df.apply(lambda r: _profit_amount(r.get("판단기준단가"), r.get("제조원가Ⅱ(㎡)"), r.get("총량_M2")), axis=1)
             total_profit = pd.to_numeric(show_df["예상영업이익(원)"], errors="coerce").sum(min_count=1)
             total_sales = pd.to_numeric(show_df["매출액"], errors="coerce").sum()
             total_qty = pd.to_numeric(show_df["총량_M2"], errors="coerce").sum()
@@ -4892,12 +5005,13 @@ if active_main_tab == "💰 품목별 수익성":
                 st.metric("예상 총영업이익", "" if pd.isna(total_profit) else f"{int(round(total_profit, 0)):,}원")
 
             display_df = show_df[[
-                "거래처", "최근날짜", "최근단가", "제조원가Ⅰ(㎡)", "공헌이익률(%)",
+                "거래처", "최근날짜", "판단기준단가", "제조원가Ⅰ(㎡)", "공헌이익률(%)",
                 "제조원가Ⅱ(㎡)", "영업이익률(%)", "출고횟수", "월평균_출고량",
-                "월평균_매출", "총량_M2", "매출액", "예상영업이익(원)"
+                "월평균_매출", "총량_M2", "매출액", "예상영업이익(원)",
+                "최근단가", "단가인상기준일", "적용인상률(%)", "비교판정"
             ]].copy().rename(columns={
                 "최근날짜": "최근 날짜",
-                "최근단가": "최근 단가",
+                "판단기준단가": "레퍼런스단가",
                 "제조원가Ⅰ(㎡)": "제조원가Ⅰ",
                 "공헌이익률(%)": "공헌이익률",
                 "제조원가Ⅱ(㎡)": "제조원가Ⅱ",
@@ -4907,16 +5021,19 @@ if active_main_tab == "💰 품목별 수익성":
                 "총량_M2": "총수량(M2)",
                 "매출액": "총매출",
                 "예상영업이익(원)": "예상영업이익",
+                "최근단가": "최근단가",
+                "단가인상기준일": "단가인상기준일",
+                "적용인상률(%)": "단가인상률(%)",
             })
             clean_and_safe_display(
                 display_df,
                 pinned_cols=["거래처"],
-                text_cols=["거래처", "최근 날짜"],
+                text_cols=["거래처", "최근 날짜", "단가인상기준일", "비교판정"],
                 height=None,
                 column_width_overrides={
                     "거래처": 190,
                     "최근 날짜": 92,
-                    "최근 단가": 82,
+                    "레퍼런스단가": 88,
                     "제조원가Ⅰ": 82,
                     "공헌이익률": 82,
                     "제조원가Ⅱ": 82,
@@ -4927,6 +5044,10 @@ if active_main_tab == "💰 품목별 수익성":
                     "총수량(M2)": 96,
                     "총매출": 108,
                     "예상영업이익": 112,
+                    "최근단가": 82,
+                    "단가인상기준일": 96,
+                    "단가인상률(%)": 88,
+                    "비교판정": 120,
                 },
             )
 
@@ -5090,6 +5211,181 @@ if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
                         "이익 증감액(6M)": 108,
                     },
                 )
+
+
+if active_main_tab == "🧾 원자재 원가 조회":
+    if lazy_tabs_enabled and lazy_active_tab != "🧾 원자재 원가 조회":
+        st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
+    else:
+        st.subheader("🧾 원자재 원가 조회")
+        st.caption("엑셀의 원자재_원가 시트를 검색/비교하기 쉽게 세로형으로 정리한 탭입니다. 파일을 새로 업로드하면 이 탭의 값도 함께 업데이트됩니다.")
+        st.caption("같은 형식의 제품에서 이형지나 원자재만 바꿔 가격 차이를 볼 때, 먼저 이 탭에서 원자재 단가 차이를 확인한 뒤 견적 판단에 활용할 수 있습니다.")
+        raw_ref_df = build_raw_material_reference_table(raw_cost)
+        if raw_ref_df.empty:
+            st.info("원자재_원가 시트 데이터가 없습니다.")
+        else:
+            view_lookup, view_compare, view_product = st.tabs(["원자재 검색", "원자재 비교", "제품 연계 비교"])
+
+            with view_lookup:
+                f1, f2 = st.columns([1, 1.4])
+                with f1:
+                    raw_kind = st.selectbox("원자재 구분", options=["전체"] + sorted(raw_ref_df["구분"].dropna().astype(str).unique().tolist()), key="raw_material_kind")
+                with f2:
+                    raw_keyword = st.text_input("원자재 검색", value="", key="raw_material_keyword", placeholder="예: 옥그, 황박90, W270H")
+                filtered_raw = raw_ref_df.copy()
+                if str(raw_kind) != "전체":
+                    filtered_raw = filtered_raw[filtered_raw["구분"].astype(str) == str(raw_kind)].copy()
+                keyword_norm = normalize_product_search_text(raw_keyword)
+                if keyword_norm:
+                    filtered_raw = filtered_raw[filtered_raw["검색키"].astype(str).str.contains(keyword_norm, na=False)].copy()
+                st.markdown("#### 원자재 단가 목록")
+                clean_and_safe_display(
+                    filtered_raw[["구분", "자재명", "원가(㎡)", "합지속도(mpm)"]] if not filtered_raw.empty else pd.DataFrame(columns=["구분", "자재명", "원가(㎡)", "합지속도(mpm)"]),
+                    pinned_cols=["구분", "자재명"],
+                    text_cols=["구분", "자재명"],
+                    height=calc_table_height(filtered_raw, min_rows=3, max_rows=12),
+                    column_width_overrides={
+                        "구분": 80,
+                        "자재명": 160,
+                        "원가(㎡)": 90,
+                        "합지속도(mpm)": 100,
+                    },
+                )
+
+            with view_compare:
+                st.markdown("#### 원자재 가격 비교")
+                compare_kind = st.selectbox("비교 구분", options=sorted(raw_ref_df["구분"].dropna().astype(str).unique().tolist()), key="raw_material_compare_kind")
+                compare_df = raw_ref_df[raw_ref_df["구분"].astype(str) == str(compare_kind)].copy()
+                compare_options = compare_df["자재명"].dropna().astype(str).tolist()
+                if compare_options:
+                    default_right = 1 if len(compare_options) > 1 else 0
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        base_material = st.selectbox("기준 자재", options=compare_options, key="raw_material_compare_left")
+                    with c2:
+                        target_material = st.selectbox("비교 자재", options=compare_options, index=default_right, key="raw_material_compare_right")
+                    base_row = compare_df[compare_df["자재명"].astype(str) == str(base_material)].head(1)
+                    target_row = compare_df[compare_df["자재명"].astype(str) == str(target_material)].head(1)
+                    if not base_row.empty and not target_row.empty:
+                        base_cost = float(pd.to_numeric(base_row["원가(㎡)"], errors="coerce").iloc[0]) if pd.notna(pd.to_numeric(base_row["원가(㎡)"], errors="coerce").iloc[0]) else np.nan
+                        target_cost = float(pd.to_numeric(target_row["원가(㎡)"], errors="coerce").iloc[0]) if pd.notna(pd.to_numeric(target_row["원가(㎡)"], errors="coerce").iloc[0]) else np.nan
+                        diff_cost = target_cost - base_cost if pd.notna(base_cost) and pd.notna(target_cost) else np.nan
+                        diff_rate = (diff_cost / base_cost * 100.0) if pd.notna(diff_cost) and pd.notna(base_cost) and base_cost != 0 else np.nan
+                        m1, m2, m3, m4 = st.columns(4)
+                        with m1:
+                            st.metric("기준 자재 원가", "" if pd.isna(base_cost) else f"{base_cost:,.1f}")
+                        with m2:
+                            st.metric("비교 자재 원가", "" if pd.isna(target_cost) else f"{target_cost:,.1f}")
+                        with m3:
+                            st.metric("원가 차이", "" if pd.isna(diff_cost) else f"{diff_cost:,.1f}")
+                        with m4:
+                            st.metric("차이율", "" if pd.isna(diff_rate) else f"{diff_rate:,.1f}%")
+                        compare_view = pd.DataFrame([
+                            {"구분": compare_kind, "자재명": base_material, "원가(㎡)": base_cost, "합지속도(mpm)": pd.to_numeric(base_row["합지속도(mpm)"], errors="coerce").iloc[0] if "합지속도(mpm)" in base_row.columns else np.nan},
+                            {"구분": compare_kind, "자재명": target_material, "원가(㎡)": target_cost, "합지속도(mpm)": pd.to_numeric(target_row["합지속도(mpm)"], errors="coerce").iloc[0] if "합지속도(mpm)" in target_row.columns else np.nan},
+                        ])
+                        clean_and_safe_display(
+                            compare_view,
+                            pinned_cols=["구분", "자재명"],
+                            text_cols=["구분", "자재명"],
+                            height=calc_table_height(compare_view, min_rows=2, max_rows=2),
+                            column_width_overrides={
+                                "구분": 80,
+                                "자재명": 160,
+                                "원가(㎡)": 90,
+                                "합지속도(mpm)": 100,
+                            },
+                        )
+
+            with view_product:
+                st.markdown("#### 제품 기준 원자재 교체 비교")
+                st.caption("같은 형식의 제품에서 원지·이형지·점착제만 바꿨을 때 원가 차이와 최근 판매단가 기준 수익성 변화를 빠르게 보는 용도입니다.")
+                material_map = {
+                    "원지": {"name_col": "원지", "cost_col": "원지원가", "raw_kind": "원지"},
+                    "이형지": {"name_col": "이형지", "cost_col": "이형지원가", "raw_kind": "이형지"},
+                    "점착제": {"name_col": "점착제", "cost_col": "점착제원가", "raw_kind": "점착제"},
+                    "합지": {"name_col": "합지공정", "cost_col": "합지원가", "raw_kind": "합지"},
+                    "재단": {"name_col": "재단공정", "cost_col": "재단원가", "raw_kind": "재단"},
+                }
+                product_options = sorted(cost_lookup["품목코드"].dropna().astype(str).unique().tolist()) if (not cost_lookup.empty and "품목코드" in cost_lookup.columns) else []
+                if not product_options:
+                    st.info("비교할 품목 BOM 데이터가 없습니다.")
+                else:
+                    p1, p2 = st.columns([1.2, 0.8])
+                    with p1:
+                        base_product_code = st.selectbox("기준 품목코드", options=product_options, key="raw_material_product_code")
+                    with p2:
+                        material_group = st.selectbox("교체할 항목", options=list(material_map.keys()), key="raw_material_product_group")
+                    focus = material_map[material_group]
+                    product_row = cost_lookup[cost_lookup["품목코드"].astype(str) == str(base_product_code)].head(1)
+                    if product_row.empty:
+                        st.info("선택한 품목의 BOM 정보를 찾지 못했습니다.")
+                    else:
+                        current_name = str(product_row.iloc[0].get(focus["name_col"], "") or "")
+                        current_component_cost = pd.to_numeric(pd.Series([product_row.iloc[0].get(focus["cost_col"], np.nan)]), errors="coerce").iloc[0]
+                        candidate_pool = raw_ref_df[raw_ref_df["구분"].astype(str) == str(focus["raw_kind"])].copy()
+                        candidate_options = candidate_pool["자재명"].dropna().astype(str).tolist()
+                        if not candidate_options:
+                            st.info("선택한 항목에 대한 대체 원자재 목록이 없습니다.")
+                        else:
+                            default_idx = 0
+                            for idx, name in enumerate(candidate_options):
+                                if str(name) != current_name:
+                                    default_idx = idx
+                                    break
+                            alt_material = st.selectbox("비교할 대체 자재", options=candidate_options, index=default_idx, key="raw_material_alt_name")
+                            alt_row = candidate_pool[candidate_pool["자재명"].astype(str) == str(alt_material)].head(1)
+                            alt_cost = pd.to_numeric(alt_row["원가(㎡)"], errors="coerce").iloc[0] if not alt_row.empty else np.nan
+                            current_mfg1 = pd.to_numeric(pd.Series([product_row.iloc[0].get("제조원가Ⅰ(㎡)", np.nan)]), errors="coerce").iloc[0]
+                            current_mfg2 = pd.to_numeric(pd.Series([product_row.iloc[0].get("제조원가Ⅱ(㎡)", np.nan)]), errors="coerce").iloc[0]
+                            cost_delta = alt_cost - current_component_cost if pd.notna(alt_cost) and pd.notna(current_component_cost) else np.nan
+                            new_mfg1 = current_mfg1 - current_component_cost + alt_cost if pd.notna(current_mfg1) and pd.notna(current_component_cost) and pd.notna(alt_cost) else np.nan
+                            new_mfg2 = current_mfg2 - current_component_cost + alt_cost if pd.notna(current_mfg2) and pd.notna(current_component_cost) and pd.notna(alt_cost) else np.nan
+                            recent_price_ref = np.nan
+                            if not q.empty and {"품목코드", "날짜", "단가(원/M2)"}.issubset(set(q.columns)):
+                                product_price_scope = q[q["품목코드"].astype(str) == str(base_product_code)].copy()
+                                if not product_price_scope.empty:
+                                    product_price_scope["날짜"] = pd.to_datetime(product_price_scope["날짜"], errors="coerce")
+                                    product_price_scope["단가(원/M2)"] = pd.to_numeric(product_price_scope["단가(원/M2)"], errors="coerce")
+                                    product_price_scope = _positive_price_frame(product_price_scope)
+                                    if not product_price_scope.empty:
+                                        if "거래처" in product_price_scope.columns:
+                                            recent_each = product_price_scope.sort_values("날짜").groupby("거래처", as_index=False).tail(1)
+                                            recent_price_ref = pd.to_numeric(recent_each["단가(원/M2)"], errors="coerce").median()
+                                        else:
+                                            recent_price_ref = pd.to_numeric(product_price_scope.sort_values("날짜")["단가(원/M2)"], errors="coerce").tail(1).median()
+                            current_op_margin = _margin_ratio(recent_price_ref, current_mfg2)
+                            alt_op_margin = _margin_ratio(recent_price_ref, new_mfg2)
+                            m1, m2, m3, m4 = st.columns(4)
+                            with m1:
+                                st.metric("현재 자재", current_name if current_name else "-")
+                            with m2:
+                                st.metric("대체 자재", alt_material if alt_material else "-")
+                            with m3:
+                                st.metric("원가 차이(㎡)", "" if pd.isna(cost_delta) else f"{cost_delta:,.1f}")
+                            with m4:
+                                st.metric("추정 제조원가Ⅱ 변화", "" if pd.isna(new_mfg2) or pd.isna(current_mfg2) else f"{(new_mfg2-current_mfg2):,.1f}")
+                            compare_product_view = pd.DataFrame([
+                                {"구분": "현재 사양", "자재명": current_name, "원가(㎡)": current_component_cost, "제조원가Ⅰ": current_mfg1, "제조원가Ⅱ": current_mfg2, "최근단가 기준 영업이익률(%)": current_op_margin},
+                                {"구분": "대체안", "자재명": alt_material, "원가(㎡)": alt_cost, "제조원가Ⅰ": new_mfg1, "제조원가Ⅱ": new_mfg2, "최근단가 기준 영업이익률(%)": alt_op_margin},
+                            ])
+                            clean_and_safe_display(
+                                compare_product_view,
+                                pinned_cols=["구분", "자재명"],
+                                text_cols=["구분", "자재명"],
+                                height=calc_table_height(compare_product_view, min_rows=2, max_rows=2),
+                                column_width_overrides={
+                                    "구분": 88,
+                                    "자재명": 170,
+                                    "원가(㎡)": 90,
+                                    "제조원가Ⅰ": 90,
+                                    "제조원가Ⅱ": 90,
+                                    "최근단가 기준 영업이익률(%)": 150,
+                                },
+                            )
+                            if pd.notna(recent_price_ref):
+                                st.caption(f"참고: 최근 판매단가 비교 기준은 선택 품목의 거래처별 최근단가 중앙값 {recent_price_ref:,.0f}원/㎡ 입니다.")
+            st.caption("추천 활용: ① 원자재 검색에서 단가를 찾고, ② 원자재 비교에서 옥그·황박90 같은 자재 차이를 확인하고, ③ 제품 연계 비교에서 기존 품목 제조원가/영업이익률이 얼마나 달라지는지 함께 판단하세요.")
 
 if active_main_tab == "📉 매출 하락 분석":
     if lazy_tabs_enabled and lazy_active_tab != "📉 매출 하락 분석":
