@@ -206,6 +206,14 @@ div[data-testid="stDataFrame"] {
     width: 100% !important;
 }
 
+div[data-testid="stDataFrame"] [role="columnheader"],
+div[data-testid="stDataEditor"] [role="columnheader"] {
+    justify-content: center !important;
+    text-align: center !important;
+    white-space: normal !important;
+    line-height: 1.18 !important;
+}
+
 .app-main-title {
     display: block;
     font-size: 1.8rem;
@@ -391,11 +399,20 @@ def build_filtered_recent_snapshot(df, group_cols, include_width_history=False, 
     sort_cols = [c for c in base_cols if c in work.columns] + ["날짜"]
     work = work.sort_values(sort_cols, kind="mergesort")
 
-    latest = (
-        work.groupby(base_cols, as_index=False, dropna=False)
-        .tail(1)[base_cols + [c for c in ["날짜", "단가(원/M2)"] if c in work.columns]]
-        .rename(columns={"날짜": "최근날짜", "단가(원/M2)": "최근단가"})
-    )
+    latest_keys = work.groupby(base_cols, as_index=False, dropna=False).tail(1)[base_cols].copy()
+    latest_keys = latest_keys.drop_duplicates(subset=base_cols, keep="last")
+    positive_work = _positive_price_frame(work)
+    if not positive_work.empty:
+        latest_price = (
+            positive_work.groupby(base_cols, as_index=False, dropna=False)
+            .tail(1)[base_cols + [c for c in ["날짜", "단가(원/M2)"] if c in positive_work.columns]]
+            .rename(columns={"날짜": "최근날짜", "단가(원/M2)": "최근단가"})
+        )
+        latest = latest_keys.merge(latest_price, on=base_cols, how="left")
+    else:
+        latest = latest_keys.copy()
+        latest["최근날짜"] = pd.NaT
+        latest["최근단가"] = np.nan
 
     if "최근날짜" in latest.columns:
         latest["최근날짜"] = pd.to_datetime(latest["최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -1563,7 +1580,7 @@ def load_excel(file_bytes):
         tmp = tmp.sort_values(sc, kind="mergesort")
 
     if not tmp.empty and "단가(원/M2)" in tmp.columns and {"거래처", "품목코드"} <= set(tmp.columns):
-        _t = tmp.dropna(subset=["단가(원/M2)"]).groupby(
+        _t = _positive_price_frame(tmp).groupby(
             ["거래처", "품목코드"], as_index=False, dropna=False
         ).tail(1)
         _ec = ["거래처", "품목코드", "단가(원/M2)"] + (["날짜"] if "날짜" in _t.columns else [])
@@ -1667,6 +1684,15 @@ def _fmt_pct(v):
     return f"{float(v):,.1f}%"
 
 
+def _positive_price_frame(df, price_col="단가(원/M2)"):
+    if df is None:
+        return pd.DataFrame()
+    if df.empty or price_col not in df.columns:
+        return df.iloc[0:0].copy()
+    price = pd.to_numeric(df[price_col], errors="coerce")
+    return df[price.notna() & (price > 0)].copy()
+
+
 @st.cache_data(show_spinner=False, max_entries=4)
 def build_cost_lookup(bom_df, raw_df):
     cols = ["품목코드", "제조원가Ⅰ(㎡)", "제조원가Ⅱ(㎡)", "원지", "원지원가", "이형지", "이형지원가", "점착제", "점착제원가", "원자재합계", "합지공정", "합지원가", "합지속도(mpm)", "재단공정", "재단원가", "로스율", "로스원가", "운송판관비"]
@@ -1745,7 +1771,7 @@ def build_item_profitability_pack(q, cost_lookup):
         최근날짜=("날짜", "max"),
     )
     latest = (
-        df.dropna(subset=["단가(원/M2)"])
+        _positive_price_frame(df)
         .sort_values("날짜")
         .groupby(["품목코드", "품목표시", "거래처"], as_index=False, observed=True)
         .tail(1)[["품목코드", "품목표시", "거래처", "단가(원/M2)"]]
@@ -1800,7 +1826,7 @@ def build_customer_profitability_pack(q, cost_lookup):
         개월수=("월", "nunique"),
     )
     recent = (
-        df.dropna(subset=["단가(원/M2)"])
+        _positive_price_frame(df)
         .sort_values("날짜")
         .groupby(["거래처", "품목코드", "품목표시"], as_index=False, observed=True)
         .tail(1)[["거래처", "품목코드", "품목표시", "날짜", "단가(원/M2)"]]
@@ -2206,8 +2232,9 @@ def build_quote_reference(q_ref):
         .tail(1)[["품목코드", "거래처", "품목명(공식)", "점착제코드", "점착제명"]]
     )
 
+    positive_unit_df = _positive_price_frame(df)
     recent_unit = (
-        df.dropna(subset=["단가(원/M2)"])
+        positive_unit_df
         .sort_values("날짜")
         .groupby(["품목코드", "거래처"], as_index=False)
         .tail(1)[["품목코드", "거래처", "단가(원/M2)", "날짜"]]
@@ -2215,7 +2242,7 @@ def build_quote_reference(q_ref):
     )
 
     unit_extreme = (
-        df.dropna(subset=["단가(원/M2)"])
+        positive_unit_df
         .groupby(["품목코드", "거래처"], dropna=False)
         .agg(
             최저단가=("단가(원/M2)", "min"),
@@ -4643,89 +4670,147 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         else:
                             st.markdown("#### 추천 기준단가 요약")
 
-                            if not reco_summary.empty:
-                                reco_summary = reco_summary.copy()
-                                cost_row = cost_lookup[cost_lookup["품목코드"].astype(str) == str(selected_quote_product)].copy() if not cost_lookup.empty else pd.DataFrame()
-                                if not cost_row.empty:
-                                    cost_info = cost_row.iloc[0]
-                                    for src, dst in [("제조원가Ⅰ(㎡)", "제조원가Ⅰ"), ("제조원가Ⅱ(㎡)", "제조원가Ⅱ")]:
-                                        reco_summary[dst] = cost_info.get(src, np.nan)
-                                    reco_summary["추천하한_영업이익률(%)"] = reco_summary["추천하한단가"].apply(lambda v: _margin_ratio(v, cost_info.get("제조원가Ⅱ(㎡)")))
-                                    reco_summary["추천기준_영업이익률(%)"] = reco_summary["추천기준단가"].apply(lambda v: _margin_ratio(v, cost_info.get("제조원가Ⅱ(㎡)")))
-                                    reco_summary["추천상한_영업이익률(%)"] = reco_summary["추천상한단가"].apply(lambda v: _margin_ratio(v, cost_info.get("제조원가Ⅱ(㎡)")))
-                                summary_cols = [
-                                    "품목코드", "입력_거래처월평균매출", "입력_품목예상월매출", "입력_품목예상월수량",
-                                    "추천하한단가", "추천기준단가", "추천상한단가", "제조원가Ⅰ", "제조원가Ⅱ",
-                                    "추천하한_영업이익률(%)", "추천기준_영업이익률(%)", "추천상한_영업이익률(%)",
-                                    "활용레퍼런스수", "전체후보수", "상위레퍼런스최근단가중앙경과일", "추천기준"
-                                ]
-                                summary_cols = [c for c in summary_cols if c in reco_summary.columns]
+                            reco_summary = reco_summary.copy()
+                            cost_row = cost_lookup[cost_lookup["품목코드"].astype(str) == str(selected_quote_product)].copy() if not cost_lookup.empty else pd.DataFrame()
+                            cost_info = cost_row.iloc[0] if not cost_row.empty else pd.Series(dtype=object)
+                            if not cost_row.empty:
+                                for src, dst in [("제조원가Ⅰ(㎡)", "제조원가Ⅰ"), ("제조원가Ⅱ(㎡)", "제조원가Ⅱ")]:
+                                    reco_summary[dst] = cost_info.get(src, np.nan)
+                                reco_summary["추천하한_영업이익률(%)"] = reco_summary["추천하한단가"].apply(lambda v: _margin_ratio(v, cost_info.get("제조원가Ⅱ(㎡)")))
+                                reco_summary["추천기준_영업이익률(%)"] = reco_summary["추천기준단가"].apply(lambda v: _margin_ratio(v, cost_info.get("제조원가Ⅱ(㎡)")))
+                                reco_summary["추천상한_영업이익률(%)"] = reco_summary["추천상한단가"].apply(lambda v: _margin_ratio(v, cost_info.get("제조원가Ⅱ(㎡)")))
+
+                            summary_main_cols = [
+                                "품목코드", "입력_거래처월평균매출", "입력_품목예상월매출", "입력_품목예상월수량",
+                                "추천하한단가", "추천기준단가", "추천상한단가", "활용레퍼런스수", "전체후보수",
+                                "상위레퍼런스최근단가중앙경과일"
+                            ]
+                            summary_main_cols = [c for c in summary_main_cols if c in reco_summary.columns]
+                            summary_profit_cols = [
+                                "품목코드", "제조원가Ⅰ", "제조원가Ⅱ",
+                                "추천하한_영업이익률(%)", "추천기준_영업이익률(%)", "추천상한_영업이익률(%)"
+                            ]
+                            summary_profit_cols = [c for c in summary_profit_cols if c in reco_summary.columns]
+
                             clean_and_safe_display(
-                                reco_summary[summary_cols],
+                                reco_summary[summary_main_cols],
                                 pinned_cols=["품목코드"],
-                                text_cols=["품목코드", "추천기준"],
-                                height=calc_table_height(reco_summary, min_rows=1, max_rows=3),
+                                text_cols=["품목코드"],
+                                height=calc_table_height(reco_summary, min_rows=1, max_rows=2),
                                 column_width_overrides={
                                     "품목코드": 145,
-                                    "입력_거래처월평균매출": 125,
-                                    "입력_품목예상월매출": 125,
-                                    "입력_품목예상월수량": 115,
-                                    "추천하한단가": 90,
-                                    "추천기준단가": 95,
-                                    "추천상한단가": 90,
-                                    "활용레퍼런스수": 80,
-                                    "전체후보수": 70,
-                                    "상위레퍼런스최근단가중앙경과일": 140,
-                                    "추천기준": 300,
+                                    "입력_거래처월평균매출": 118,
+                                    "입력_품목예상월매출": 112,
+                                    "입력_품목예상월수량": 98,
+                                    "추천하한단가": 82,
+                                    "추천기준단가": 82,
+                                    "추천상한단가": 82,
+                                    "활용레퍼런스수": 74,
+                                    "전체후보수": 74,
+                                    "상위레퍼런스최근단가중앙경과일": 108,
                                 },
                             )
 
+                            if "추천기준" in reco_summary.columns and reco_summary["추천기준"].notna().any():
+                                st.info(f"추천 기준: {str(reco_summary['추천기준'].iloc[0])}")
+
+                            if summary_profit_cols:
+                                st.markdown("##### 원가·영업이익률 요약")
+                                clean_and_safe_display(
+                                    reco_summary[summary_profit_cols],
+                                    pinned_cols=["품목코드"],
+                                    text_cols=["품목코드"],
+                                    height=calc_table_height(reco_summary, min_rows=1, max_rows=2),
+                                    column_width_overrides={
+                                        "품목코드": 145,
+                                        "제조원가Ⅰ": 84,
+                                        "제조원가Ⅱ": 84,
+                                        "추천하한_영업이익률(%)": 100,
+                                        "추천기준_영업이익률(%)": 100,
+                                        "추천상한_영업이익률(%)": 100,
+                                    },
+                                )
+
                             st.markdown("#### 유사 레퍼런스 TOP")
-
-
                             st.caption("이익률 표기는 요청하신 예시와 동일하게 원가 대비 방식((판매단가-원가) ÷ 원가)으로 계산했습니다. 공헌이익률은 제조원가Ⅰ, 영업이익률은 제조원가Ⅱ 기준입니다.")
                             st.markdown("#### 원가 카드 (BOM_제조원가 연동)")
                             if cost_row.empty:
-                                cost_display = pd.DataFrame([{
-                                    "품목코드": selected_quote_product,
-                                    "원지": "",
-                                    "원지원가": "",
-                                    "이형지": "",
-                                    "이형지원가": "",
-                                    "점착제": "",
-                                    "점착제원가": "",
-                                    "원자재합계": "",
-                                    "합지공정": "",
-                                    "합지원가": "",
-                                    "재단공정": "",
-                                    "재단원가": "",
-                                    "로스율": "",
-                                    "로스원가": "",
-                                    "운송판관비": "",
-                                    "제조원가Ⅰ": "",
-                                    "제조원가Ⅱ": "",
-                                }])
+                                cost_display = pd.DataFrame([
+                                    {
+                                        "구분": "BOM구성",
+                                        "품목코드": selected_quote_product,
+                                        "제조원가Ⅰ": "",
+                                        "제조원가Ⅱ": "",
+                                        "원지": "",
+                                        "이형지": "",
+                                        "점착제": "",
+                                        "합지공정": "",
+                                        "재단공정": "",
+                                        "로스율": "",
+                                        "운송판관비": "",
+                                    },
+                                    {
+                                        "구분": "원가(㎡)",
+                                        "품목코드": "",
+                                        "제조원가Ⅰ": "",
+                                        "제조원가Ⅱ": "",
+                                        "원지": "",
+                                        "이형지": "",
+                                        "점착제": "",
+                                        "합지공정": "",
+                                        "재단공정": "",
+                                        "로스율": "",
+                                        "운송판관비": "",
+                                    },
+                                ])
                             else:
-                                cost_display = pd.DataFrame([{
-                                    "품목코드": selected_quote_product,
-                                    "원지": cost_info.get("원지", ""),
-                                    "원지원가": _fmt_value(cost_info.get("원지원가"), 1),
-                                    "이형지": cost_info.get("이형지", ""),
-                                    "이형지원가": _fmt_value(cost_info.get("이형지원가"), 1),
-                                    "점착제": cost_info.get("점착제", ""),
-                                    "점착제원가": _fmt_value(cost_info.get("점착제원가"), 1),
-                                    "원자재합계": _fmt_value(cost_info.get("원자재합계"), 1),
-                                    "합지공정": cost_info.get("합지공정", ""),
-                                    "합지원가": _fmt_value(cost_info.get("합지원가"), 1),
-                                    "재단공정": cost_info.get("재단공정", ""),
-                                    "재단원가": _fmt_value(cost_info.get("재단원가"), 1),
-                                    "로스율": _fmt_pct((float(cost_info.get("로스율", np.nan)) * 100.0) if pd.notna(cost_info.get("로스율", np.nan)) else np.nan),
-                                    "로스원가": _fmt_value(cost_info.get("로스원가"), 1),
-                                    "운송판관비": _fmt_value(cost_info.get("운송판관비"), 1),
-                                    "제조원가Ⅰ": _fmt_value(cost_info.get("제조원가Ⅰ(㎡)"), 1),
-                                    "제조원가Ⅱ": _fmt_value(cost_info.get("제조원가Ⅱ(㎡)"), 1),
-                                }])
-                            clean_and_safe_display(cost_display, pinned_cols=["품목코드"], text_cols=list(cost_display.columns), height=calc_table_height(cost_display, min_rows=1, max_rows=2))
+                                cost_display = pd.DataFrame([
+                                    {
+                                        "구분": "BOM구성",
+                                        "품목코드": selected_quote_product,
+                                        "제조원가Ⅰ": _fmt_value(cost_info.get("제조원가Ⅰ(㎡)"), 1),
+                                        "제조원가Ⅱ": _fmt_value(cost_info.get("제조원가Ⅱ(㎡)"), 1),
+                                        "원지": cost_info.get("원지", ""),
+                                        "이형지": cost_info.get("이형지", ""),
+                                        "점착제": cost_info.get("점착제", ""),
+                                        "합지공정": cost_info.get("합지공정", ""),
+                                        "재단공정": cost_info.get("재단공정", ""),
+                                        "로스율": _fmt_pct((float(cost_info.get("로스율", np.nan)) * 100.0) if pd.notna(cost_info.get("로스율", np.nan)) else np.nan),
+                                        "운송판관비": _fmt_value(cost_info.get("운송판관비"), 1),
+                                    },
+                                    {
+                                        "구분": "원가(㎡)",
+                                        "품목코드": "",
+                                        "제조원가Ⅰ": "",
+                                        "제조원가Ⅱ": "",
+                                        "원지": _fmt_value(cost_info.get("원지원가"), 1),
+                                        "이형지": _fmt_value(cost_info.get("이형지원가"), 1),
+                                        "점착제": _fmt_value(cost_info.get("점착제원가"), 1),
+                                        "합지공정": _fmt_value(cost_info.get("합지원가"), 1),
+                                        "재단공정": _fmt_value(cost_info.get("재단원가"), 1),
+                                        "로스율": _fmt_value(cost_info.get("로스원가"), 1),
+                                        "운송판관비": _fmt_value(cost_info.get("운송판관비"), 1),
+                                    },
+                                ])
+                            clean_and_safe_display(
+                                cost_display,
+                                pinned_cols=["구분", "품목코드"],
+                                text_cols=list(cost_display.columns),
+                                height=calc_table_height(cost_display, min_rows=2, max_rows=2),
+                                column_width_overrides={
+                                    "구분": 80,
+                                    "품목코드": 145,
+                                    "제조원가Ⅰ": 84,
+                                    "제조원가Ⅱ": 84,
+                                    "원지": 88,
+                                    "이형지": 88,
+                                    "점착제": 88,
+                                    "합지공정": 88,
+                                    "재단공정": 88,
+                                    "로스율": 84,
+                                    "운송판관비": 88,
+                                },
+                            )
 
                             reco_cols = [
                                 "추천순위", "적합도등급", "품목코드", "거래처", "거래처월평균매출", "월평균_매출", "월평균_출고량",
@@ -4792,31 +4877,58 @@ if active_main_tab == "💰 품목별 수익성":
             selected_item_profit = st.selectbox("수익성을 확인할 품목", options=product_options, key="item_profit_select")
             show_df = item_profit_df[item_profit_df["품목표시"].astype(str) == str(selected_item_profit)].copy()
             show_df = show_df.sort_values(["매출액", "거래처"], ascending=[False, True]).reset_index(drop=True)
-            display_df = pd.DataFrame({
-                "거래처": show_df["거래처"].astype(str),
-                "최근날짜": show_df["최근날짜"].astype(str),
-                "최근단가": show_df["최근단가"].map(lambda v: _fmt_value(v, 0)),
-                "제조원가Ⅰ": show_df["제조원가Ⅰ(㎡)"].map(lambda v: _fmt_value(v, 1)),
-                "공헌이익률": show_df["공헌이익률(%)"].map(_fmt_pct),
-                "제조원가Ⅱ": show_df["제조원가Ⅱ(㎡)"].map(lambda v: _fmt_value(v, 1)),
-                "영업이익률": show_df["영업이익률(%)"].map(_fmt_pct),
-                "출고횟수": show_df["출고횟수"].map(lambda v: _fmt_value(v, 0)),
-                "월평균_출고량": show_df["월평균_출고량"].map(lambda v: _fmt_value(v, 1)),
-                "월평균_매출": show_df["월평균_매출"].map(lambda v: _fmt_value(v, 0)),
-                "총량_M2": show_df["총량_M2"].map(lambda v: _fmt_value(v, 1)),
-                "매출액": show_df["매출액"].map(lambda v: _fmt_value(v, 0)),
-                "예상영업이익(원)": show_df["예상영업이익(원)"].map(lambda v: _fmt_value(v, 0)),
-            })
-            clean_and_safe_display(display_df, pinned_cols=["거래처"], text_cols=list(display_df.columns), height=None)
             total_profit = pd.to_numeric(show_df["예상영업이익(원)"], errors="coerce").sum(min_count=1)
             total_sales = pd.to_numeric(show_df["매출액"], errors="coerce").sum()
-            metric_cols = st.columns(3)
+            total_qty = pd.to_numeric(show_df["총량_M2"], errors="coerce").sum()
+
+            metric_cols = st.columns(4)
             with metric_cols[0]:
                 st.metric("선택 품목 거래처 수", f"{len(show_df):,}")
             with metric_cols[1]:
-                st.metric("선택 품목 총매출", f"{int(round(total_sales, 0)):,}원")
+                st.metric("선택 품목 총수량(㎡)", f"{0 if pd.isna(total_qty) else total_qty:,.1f}")
             with metric_cols[2]:
-                st.metric("예상 총영업이익(제조원가Ⅱ)", "" if pd.isna(total_profit) else f"{int(round(total_profit, 0)):,}원")
+                st.metric("선택 품목 총매출", f"{int(round(total_sales, 0)):,}원")
+            with metric_cols[3]:
+                st.metric("예상 총영업이익", "" if pd.isna(total_profit) else f"{int(round(total_profit, 0)):,}원")
+
+            display_df = show_df[[
+                "거래처", "최근날짜", "최근단가", "제조원가Ⅰ(㎡)", "공헌이익률(%)",
+                "제조원가Ⅱ(㎡)", "영업이익률(%)", "출고횟수", "월평균_출고량",
+                "월평균_매출", "총량_M2", "매출액", "예상영업이익(원)"
+            ]].copy().rename(columns={
+                "최근날짜": "최근 날짜",
+                "최근단가": "최근 단가",
+                "제조원가Ⅰ(㎡)": "제조원가Ⅰ",
+                "공헌이익률(%)": "공헌이익률",
+                "제조원가Ⅱ(㎡)": "제조원가Ⅱ",
+                "영업이익률(%)": "영업이익률",
+                "월평균_출고량": "월평균 출고량",
+                "월평균_매출": "월평균 매출",
+                "총량_M2": "총수량(M2)",
+                "매출액": "총매출",
+                "예상영업이익(원)": "예상영업이익",
+            })
+            clean_and_safe_display(
+                display_df,
+                pinned_cols=["거래처"],
+                text_cols=["거래처", "최근 날짜"],
+                height=None,
+                column_width_overrides={
+                    "거래처": 190,
+                    "최근 날짜": 92,
+                    "최근 단가": 82,
+                    "제조원가Ⅰ": 82,
+                    "공헌이익률": 82,
+                    "제조원가Ⅱ": 82,
+                    "영업이익률": 82,
+                    "출고횟수": 72,
+                    "월평균 출고량": 96,
+                    "월평균 매출": 108,
+                    "총수량(M2)": 96,
+                    "총매출": 108,
+                    "예상영업이익": 112,
+                },
+            )
 
 if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
     if lazy_tabs_enabled and lazy_active_tab != "🏢 업체별 수익성 시뮬레이션":
@@ -4833,16 +4945,39 @@ if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
         if summary_df.empty or detail_df.empty:
             st.info("업체별 수익성 시뮬레이션 데이터가 없습니다.")
         else:
-            summary_view = summary_df.copy()
-            summary_view["최근6개월매출"] = summary_view["최근6개월매출"].map(lambda v: _fmt_value(v, 0))
-            summary_view["최근6개월_월평균매출"] = summary_view["최근6개월_월평균매출"].map(lambda v: _fmt_value(v, 0))
-            summary_view["최근6개월_월평균출고량"] = summary_view["최근6개월_월평균출고량"].map(lambda v: _fmt_value(v, 1))
-            summary_view["현재예상영업이익"] = summary_view["현재예상영업이익"].map(lambda v: _fmt_value(v, 0))
-            summary_view["현재예상공헌이익"] = summary_view["현재예상공헌이익"].map(lambda v: _fmt_value(v, 0))
-            summary_view["최근3개월가중_월매출"] = summary_view["최근3개월가중_월매출"].map(lambda v: _fmt_value(v, 0))
-            summary_view["최근6개월추세_월매출"] = summary_view["최근6개월추세_월매출"].map(lambda v: _fmt_value(v, 0))
-            summary_view["가중추세_예상월매출"] = summary_view["가중추세_예상월매출"].map(lambda v: _fmt_value(v, 0))
-            clean_and_safe_display(summary_view, pinned_cols=["거래처"], text_cols=list(summary_view.columns), height=calc_table_height(summary_view, max_rows=12))
+            summary_view = summary_df[[
+                "거래처", "최근6개월매출", "최근6개월_월평균매출", "최근6개월_월평균출고량",
+                "출고횟수", "품목수", "현재예상영업이익", "현재예상공헌이익",
+                "최근3개월가중_월매출", "최근6개월추세_월매출", "가중추세_예상월매출"
+            ]].copy().rename(columns={
+                "최근6개월매출": "6개월 매출",
+                "최근6개월_월평균매출": "월평균 매출",
+                "최근6개월_월평균출고량": "월평균 출고량",
+                "현재예상영업이익": "현재 예상영업이익",
+                "현재예상공헌이익": "현재 예상공헌이익",
+                "최근3개월가중_월매출": "최근3개월 가중월매출",
+                "최근6개월추세_월매출": "최근6개월 추세월매출",
+                "가중추세_예상월매출": "가중추세 예상월매출",
+            })
+            clean_and_safe_display(
+                summary_view,
+                pinned_cols=["거래처"],
+                text_cols=["거래처"],
+                height=calc_table_height(summary_view, max_rows=12),
+                column_width_overrides={
+                    "거래처": 170,
+                    "6개월 매출": 108,
+                    "월평균 매출": 108,
+                    "월평균 출고량": 98,
+                    "출고횟수": 72,
+                    "품목수": 68,
+                    "현재 예상영업이익": 112,
+                    "현재 예상공헌이익": 112,
+                    "최근3개월 가중월매출": 112,
+                    "최근6개월 추세월매출": 112,
+                    "가중추세 예상월매출": 112,
+                },
+            )
             customer_options = summary_df["거래처"].astype(str).tolist()
             selected_profit_customer = st.selectbox("시뮬레이션할 거래처", options=customer_options, key="customer_profit_select")
             cust_month = monthly_df[monthly_df["거래처"].astype(str) == str(selected_profit_customer)].copy()
@@ -4865,18 +5000,34 @@ if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
             else:
                 editor_seed = pd.DataFrame({
                     "품목코드": cust_detail["품목코드"].astype(str),
-                    "품목표시": cust_detail["품목표시"].astype(str),
-                    "최근단가": cust_detail["최근단가"].map(lambda v: _fmt_value(v, 0)),
+                    "최근단가": pd.to_numeric(cust_detail["최근단가"], errors="coerce"),
                     "조정단가": pd.to_numeric(cust_detail["최근단가"], errors="coerce"),
-                    "제조원가Ⅰ": cust_detail["제조원가Ⅰ(㎡)"].map(lambda v: _fmt_value(v, 1)),
-                    "제조원가Ⅱ": cust_detail["제조원가Ⅱ(㎡)"].map(lambda v: _fmt_value(v, 1)),
-                    "출고횟수": cust_detail["출고횟수"].map(lambda v: _fmt_value(v, 0)),
-                    "월평균_출고량": cust_detail["월평균_출고량"].map(lambda v: _fmt_value(v, 1)),
-                    "월평균_매출": cust_detail["월평균_매출"].map(lambda v: _fmt_value(v, 0)),
-                    "예상6개월수량(M2)": cust_detail["예상6개월수량(M2)"].map(lambda v: _fmt_value(v, 1)),
+                    "제조원가Ⅰ": pd.to_numeric(cust_detail["제조원가Ⅰ(㎡)"], errors="coerce"),
+                    "제조원가Ⅱ": pd.to_numeric(cust_detail["제조원가Ⅱ(㎡)"], errors="coerce"),
+                    "출고횟수": pd.to_numeric(cust_detail["출고횟수"], errors="coerce"),
+                    "월평균_출고량": pd.to_numeric(cust_detail["월평균_출고량"], errors="coerce"),
+                    "월평균_매출": pd.to_numeric(cust_detail["월평균_매출"], errors="coerce"),
+                    "예상6개월수량(M2)": pd.to_numeric(cust_detail["예상6개월수량(M2)"], errors="coerce"),
                 })
                 st.markdown("#### 단가 조정 입력")
-                edited = st.data_editor(editor_seed, use_container_width=True, hide_index=True, key=f"profit_editor_{selected_profit_customer}", disabled=[c for c in editor_seed.columns if c != "조정단가"], column_config={"조정단가": st.column_config.NumberColumn("조정단가", format="%,.0f")})
+                edited = st.data_editor(
+                    editor_seed,
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"profit_editor_{selected_profit_customer}",
+                    disabled=[c for c in editor_seed.columns if c != "조정단가"],
+                    column_config={
+                        "품목코드": st.column_config.TextColumn("품목코드", width=150, pinned=True),
+                        "최근단가": st.column_config.NumberColumn("최근 단가", format="%,.0f", width=82),
+                        "조정단가": st.column_config.NumberColumn("조정 단가", format="%,.0f", width=82),
+                        "제조원가Ⅰ": st.column_config.NumberColumn("제조원가Ⅰ", format="%,.1f", width=82),
+                        "제조원가Ⅱ": st.column_config.NumberColumn("제조원가Ⅱ", format="%,.1f", width=82),
+                        "출고횟수": st.column_config.NumberColumn("출고횟수", format="%,.0f", width=72),
+                        "월평균_출고량": st.column_config.NumberColumn("월평균 출고량", format="%,.1f", width=96),
+                        "월평균_매출": st.column_config.NumberColumn("월평균 매출", format="%,.0f", width=108),
+                        "예상6개월수량(M2)": st.column_config.NumberColumn("예상6개월 수량(M2)", format="%,.1f", width=104),
+                    },
+                )
                 adjusted_map = dict(zip(edited["품목코드"].astype(str), pd.to_numeric(edited["조정단가"], errors="coerce")))
                 cust_detail["조정단가"] = cust_detail["품목코드"].astype(str).map(adjusted_map)
                 cust_detail["조정_공헌이익률(%)"] = cust_detail.apply(lambda r: _margin_ratio(r.get("조정단가"), r.get("제조원가Ⅰ(㎡)")), axis=1)
@@ -4893,28 +5044,52 @@ if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
                     st.metric("조정 후 예상 영업이익(6M)", "" if pd.isna(adjusted_profit) else f"{int(round(adjusted_profit, 0)):,}원")
                 with m3:
                     st.metric("총 수익 변화", "" if pd.isna(profit_delta) else f"{int(round(profit_delta, 0)):,}원")
-                result_display = pd.DataFrame({
-                    "품목코드": cust_detail["품목코드"].astype(str),
-                    "품목표시": cust_detail["품목표시"].astype(str),
-                    "출고횟수": cust_detail["출고횟수"].map(lambda v: _fmt_value(v, 0)),
-                    "월평균_출고량": cust_detail["월평균_출고량"].map(lambda v: _fmt_value(v, 1)),
-                    "월평균_매출": cust_detail["월평균_매출"].map(lambda v: _fmt_value(v, 0)),
-                    "최근단가": cust_detail["최근단가"].map(lambda v: _fmt_value(v, 0)),
-                    "조정단가": cust_detail["조정단가"].map(lambda v: _fmt_value(v, 0)),
-                    "제조원가Ⅰ": cust_detail["제조원가Ⅰ(㎡)"].map(lambda v: _fmt_value(v, 1)),
-                    "공헌이익률": cust_detail["공헌이익률(%)"].map(_fmt_pct),
-                    "조정공헌이익률": cust_detail["조정_공헌이익률(%)"].map(_fmt_pct),
-                    "제조원가Ⅱ": cust_detail["제조원가Ⅱ(㎡)"].map(lambda v: _fmt_value(v, 1)),
-                    "영업이익률": cust_detail["영업이익률(%)"].map(_fmt_pct),
-                    "조정영업이익률": cust_detail["조정_영업이익률(%)"].map(_fmt_pct),
-                    "예상6개월수량(M2)": cust_detail["예상6개월수량(M2)"].map(lambda v: _fmt_value(v, 1)),
-                    "현재예상영업이익(6M)": cust_detail["현재예상영업이익(6M)"].map(lambda v: _fmt_value(v, 0)),
-                    "조정예상영업이익(6M)": cust_detail["조정예상영업이익(6M)"].map(lambda v: _fmt_value(v, 0)),
-                    "이익증감액(6M)": cust_detail["이익증감액(6M)"].map(lambda v: _fmt_value(v, 0)),
+                result_display = cust_detail[[
+                    "품목코드", "출고횟수", "월평균_출고량", "월평균_매출", "최근단가", "조정단가",
+                    "제조원가Ⅰ(㎡)", "공헌이익률(%)", "조정_공헌이익률(%)", "제조원가Ⅱ(㎡)",
+                    "영업이익률(%)", "조정_영업이익률(%)", "예상6개월수량(M2)",
+                    "현재예상영업이익(6M)", "조정예상영업이익(6M)", "이익증감액(6M)"
+                ]].copy().rename(columns={
+                    "월평균_출고량": "월평균 출고량",
+                    "월평균_매출": "월평균 매출",
+                    "최근단가": "최근 단가",
+                    "조정단가": "조정 단가",
+                    "제조원가Ⅰ(㎡)": "제조원가Ⅰ",
+                    "공헌이익률(%)": "공헌이익률",
+                    "조정_공헌이익률(%)": "조정 공헌이익률",
+                    "제조원가Ⅱ(㎡)": "제조원가Ⅱ",
+                    "영업이익률(%)": "영업이익률",
+                    "조정_영업이익률(%)": "조정 영업이익률",
+                    "예상6개월수량(M2)": "예상6개월 수량(M2)",
+                    "현재예상영업이익(6M)": "현재 예상영업이익(6M)",
+                    "조정예상영업이익(6M)": "조정 후 예상영업이익(6M)",
+                    "이익증감액(6M)": "이익 증감액(6M)",
                 })
                 st.markdown("#### 품목별 수익성 시뮬레이션 결과")
-                clean_and_safe_display(result_display, pinned_cols=["품목코드", "품목표시"], text_cols=list(result_display.columns), height=None)
-
+                clean_and_safe_display(
+                    result_display,
+                    pinned_cols=["품목코드"],
+                    text_cols=["품목코드"],
+                    height=None,
+                    column_width_overrides={
+                        "품목코드": 150,
+                        "출고횟수": 72,
+                        "월평균 출고량": 96,
+                        "월평균 매출": 108,
+                        "최근 단가": 82,
+                        "조정 단가": 82,
+                        "제조원가Ⅰ": 82,
+                        "공헌이익률": 84,
+                        "조정 공헌이익률": 92,
+                        "제조원가Ⅱ": 82,
+                        "영업이익률": 84,
+                        "조정 영업이익률": 92,
+                        "예상6개월 수량(M2)": 104,
+                        "현재 예상영업이익(6M)": 114,
+                        "조정 후 예상영업이익(6M)": 118,
+                        "이익 증감액(6M)": 108,
+                    },
+                )
 
 if active_main_tab == "📉 매출 하락 분석":
     if lazy_tabs_enabled and lazy_active_tab != "📉 매출 하락 분석":
