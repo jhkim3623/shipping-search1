@@ -1,3 +1,4 @@
+import html
 import os
 from io import BytesIO
 
@@ -679,6 +680,80 @@ def render_banded_table(
 
     final_height = height if height is not None else calc_table_height(temp, max_rows=20)
     st.dataframe(styled, use_container_width=True, height=final_height, hide_index=True)
+
+
+def render_compact_html_table(
+    df,
+    height=260,
+    column_width_overrides=None,
+    center_cols=None,
+    format_overrides=None,
+    font_size="0.84rem",
+    empty_message="표시할 데이터가 없습니다.",
+):
+    if df is None or df.empty:
+        st.info(empty_message)
+        return
+
+    display_df = df.copy().reset_index(drop=True)
+    display_df.columns = [str(c) for c in display_df.columns]
+    center_cols = set(str(c) for c in (center_cols or []))
+    column_width_overrides = column_width_overrides or {}
+    format_overrides = format_overrides or {}
+
+    def _format_value(col, val):
+        if col in format_overrides and callable(format_overrides[col]):
+            return format_overrides[col](val)
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return ""
+        if pd.isna(val):
+            return ""
+        if isinstance(val, pd.Timestamp):
+            return val.strftime("%Y-%m-%d")
+        if isinstance(val, (np.integer, int)):
+            return f"{int(val):,}"
+        if isinstance(val, (np.floating, float)):
+            if any(k in str(col) for k in ["율", "%", "속도", "원가", "단가", "M2", "수량", "길이", "제조"]):
+                return f"{float(val):,.1f}"
+            return f"{float(val):,.0f}"
+        return str(val)
+
+    col_defs = []
+    for col in display_df.columns:
+        width = column_width_overrides.get(col)
+        style_width = f"width:{int(width)}px; min-width:{int(width)}px;" if width is not None else ""
+        col_defs.append((col, style_width, 'center' if col in center_cols else None))
+
+    thead_cells = []
+    for col, style_width, _ in col_defs:
+        thead_cells.append(
+            f'<th style="position:sticky; top:0; z-index:2; background:#f8fafc; color:#111827; border-bottom:1px solid #e5e7eb; padding:8px 10px; text-align:center; white-space:normal; {style_width}">{html.escape(str(col))}</th>'
+        )
+
+    tbody_rows = []
+    for row_idx in range(len(display_df)):
+        row = display_df.iloc[row_idx]
+        bg = '#ffffff' if row_idx % 2 == 0 else '#fbfdff'
+        tds = []
+        for col, style_width, forced_align in col_defs:
+            raw_val = row[col]
+            formatted = html.escape(_format_value(col, raw_val))
+            align = forced_align
+            if align is None:
+                align = 'right' if pd.api.types.is_numeric_dtype(display_df[col]) else 'left'
+            tds.append(
+                f'<td style="border-bottom:1px solid #eef2f7; padding:7px 10px; text-align:{align}; vertical-align:middle; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; {style_width}">{formatted}</td>'
+            )
+        tbody_rows.append(f'<tr style="background:{bg};">{"".join(tds)}</tr>')
+
+    html_table = (
+        f'<div style="border:1px solid #e5e7eb; border-radius:12px; overflow:auto; max-height:{int(height)}px; box-shadow:0 1px 2px rgba(15, 23, 42, 0.04);">'
+        f'<table style="width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; font-size:{font_size};">'
+        f'<thead><tr>{"".join(thead_cells)}</tr></thead>'
+        f'<tbody>{"".join(tbody_rows)}</tbody>'
+        '</table></div>'
+    )
+    st.markdown(html_table, unsafe_allow_html=True)
 
 
 def sorted_unique(series):
@@ -1497,7 +1572,7 @@ def load_excel(file_bytes):
     if "날짜" in rec.columns:
         rec["날짜"] = pd.to_datetime(rec["날짜"], errors="coerce")
 
-    for c in ["기준폭", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)"]:
+    for c in ["기준폭", "가로폭(mm)", "길이(m)", "수량(M2)", "단가(원/M2)", "금액(원)"]:
         if c in rec.columns:
             rec[c] = pd.to_numeric(rec[c], errors="coerce")
 
@@ -1786,6 +1861,110 @@ def build_raw_material_reference_table(raw_df):
     out = pd.concat(frames, ignore_index=True)
     out["검색키"] = out["자재명"].map(normalize_product_search_text)
     return out.drop_duplicates(subset=["구분", "자재명"], keep="first").sort_values(["구분", "자재명"]).reset_index(drop=True)
+
+
+def build_raw_material_option_maps(raw_ref_df):
+    option_maps = {}
+    if raw_ref_df is None or raw_ref_df.empty:
+        for kind in ["원지", "이형지", "점착제", "합지", "재단"]:
+            option_maps[kind] = pd.DataFrame(columns=["자재명", "원가(㎡)", "합지속도(mpm)"])
+        return option_maps
+    for kind in ["원지", "이형지", "점착제", "합지", "재단"]:
+        pool = raw_ref_df[raw_ref_df["구분"].astype(str) == str(kind)].copy()
+        if pool.empty:
+            option_maps[kind] = pd.DataFrame(columns=["자재명", "원가(㎡)", "합지속도(mpm)"])
+        else:
+            option_maps[kind] = pool[["자재명", "원가(㎡)", "합지속도(mpm)"]].drop_duplicates(subset=["자재명"], keep="first").reset_index(drop=True)
+    return option_maps
+
+
+def summarize_existing_bom_case(case_name, cost_row):
+    if cost_row is None or len(cost_row) == 0:
+        return {}
+    row = cost_row.iloc[0] if isinstance(cost_row, pd.DataFrame) else cost_row
+    loss_rate_value = pd.to_numeric(pd.Series([row.get("로스율", np.nan)]), errors="coerce").iloc[0]
+    return {
+        "구성명": str(case_name or row.get("품목코드", "")),
+        "품목코드": str(row.get("품목코드", "") or ""),
+        "원지": str(row.get("원지", "") or ""),
+        "이형지": str(row.get("이형지", "") or ""),
+        "점착제": str(row.get("점착제", "") or ""),
+        "합지공정": str(row.get("합지공정", "") or ""),
+        "재단공정": str(row.get("재단공정", "") or ""),
+        "합지속도(mpm)": pd.to_numeric(pd.Series([row.get("합지속도(mpm)", np.nan)]), errors="coerce").iloc[0],
+        "원지원가": pd.to_numeric(pd.Series([row.get("원지원가", np.nan)]), errors="coerce").iloc[0],
+        "이형지원가": pd.to_numeric(pd.Series([row.get("이형지원가", np.nan)]), errors="coerce").iloc[0],
+        "점착제원가": pd.to_numeric(pd.Series([row.get("점착제원가", np.nan)]), errors="coerce").iloc[0],
+        "합지원가": pd.to_numeric(pd.Series([row.get("합지원가", np.nan)]), errors="coerce").iloc[0],
+        "재단원가": pd.to_numeric(pd.Series([row.get("재단원가", np.nan)]), errors="coerce").iloc[0],
+        "원자재합계": pd.to_numeric(pd.Series([row.get("원자재합계", np.nan)]), errors="coerce").iloc[0],
+        "로스율(%)": loss_rate_value * 100.0 if pd.notna(loss_rate_value) else np.nan,
+        "로스원가": pd.to_numeric(pd.Series([row.get("로스원가", np.nan)]), errors="coerce").iloc[0],
+        "운송판관비": pd.to_numeric(pd.Series([row.get("운송판관비", np.nan)]), errors="coerce").iloc[0],
+        "제조원가Ⅰ": pd.to_numeric(pd.Series([row.get("제조원가Ⅰ(㎡)", np.nan)]), errors="coerce").iloc[0],
+        "제조원가Ⅱ": pd.to_numeric(pd.Series([row.get("제조원가Ⅱ(㎡)", np.nan)]), errors="coerce").iloc[0],
+    }
+
+
+def summarize_custom_bom_case(case_name, selections, loss_rate_pct, transport_cost, raw_option_maps):
+    def _lookup(kind, name, field):
+        pool = raw_option_maps.get(kind, pd.DataFrame())
+        if pool is None or pool.empty:
+            return np.nan
+        row = pool[pool["자재명"].astype(str) == str(name)].head(1)
+        if row.empty or field not in row.columns:
+            return np.nan
+        return pd.to_numeric(row[field], errors="coerce").iloc[0]
+
+    paper = str(selections.get("원지", "") or "")
+    liner = str(selections.get("이형지", "") or "")
+    adh = str(selections.get("점착제", "") or "")
+    lam = str(selections.get("합지", "") or "")
+    cut = str(selections.get("재단", "") or "")
+
+    paper_cost = _lookup("원지", paper, "원가(㎡)")
+    liner_cost = _lookup("이형지", liner, "원가(㎡)")
+    adh_cost = _lookup("점착제", adh, "원가(㎡)")
+    lam_cost = _lookup("합지", lam, "원가(㎡)")
+    cut_cost = _lookup("재단", cut, "원가(㎡)")
+    lam_speed = _lookup("합지", lam, "합지속도(mpm)")
+
+    component_costs = [paper_cost, liner_cost, adh_cost, lam_cost, cut_cost]
+    valid_costs = [float(v) for v in component_costs if pd.notna(v)]
+    material_sum = float(sum(valid_costs)) if valid_costs else np.nan
+    try:
+        loss_rate_pct = float(loss_rate_pct)
+    except Exception:
+        loss_rate_pct = 0.0
+    try:
+        transport_cost = float(transport_cost)
+    except Exception:
+        transport_cost = 0.0
+    loss_cost = material_sum * (loss_rate_pct / 100.0) if pd.notna(material_sum) else np.nan
+    mfg1 = material_sum + loss_cost if pd.notna(material_sum) else np.nan
+    mfg2 = mfg1 + transport_cost if pd.notna(mfg1) else np.nan
+
+    return {
+        "구성명": str(case_name or "신규 구성"),
+        "품목코드": "신규 구성",
+        "원지": paper,
+        "이형지": liner,
+        "점착제": adh,
+        "합지공정": lam,
+        "재단공정": cut,
+        "합지속도(mpm)": lam_speed,
+        "원지원가": paper_cost,
+        "이형지원가": liner_cost,
+        "점착제원가": adh_cost,
+        "합지원가": lam_cost,
+        "재단원가": cut_cost,
+        "원자재합계": material_sum,
+        "로스율(%)": loss_rate_pct,
+        "로스원가": loss_cost,
+        "운송판관비": transport_cost,
+        "제조원가Ⅰ": mfg1,
+        "제조원가Ⅱ": mfg2,
+    }
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
@@ -3897,17 +4076,17 @@ DEFAULT_FILE = "data.xlsx"
 
 st.markdown('<div class="app-main-title">출고 이력 검색(거래처/품목/가로폭/점착제)</div>', unsafe_allow_html=True)
 
-uploaded = st.file_uploader("📂 다른 파일 업로드 (미업로드 시 기본 데이터 자동 로드)", type=["xlsx"])
+with st.sidebar.expander("데이터 파일 관리", expanded=False):
+    uploaded = st.file_uploader("엑셀 파일 업로드", type=["xlsx"], key="sidebar_data_uploader")
+    st.caption("업로드 시 해당 파일을 우선 사용하고, 미업로드 시 기본 data.xlsx를 사용합니다.")
 
 if uploaded:
     file_bytes = uploaded.getvalue()
-    st.success("✅ 업로드 파일 사용")
 elif os.path.exists(DEFAULT_FILE):
     with open(DEFAULT_FILE, "rb") as f:
         file_bytes = f.read()
-    st.info(f"📌 기본 데이터({DEFAULT_FILE}) 자동 로드")
 else:
-    st.info("GitHub 레포에 data.xlsx를 추가하거나 파일을 업로드하세요.")
+    st.error("기본 데이터 파일(data.xlsx)을 찾을 수 없습니다. 사이드바에서 파일을 업로드해 주세요.")
     st.stop()
 
 rec, alias, prod, adh, cust, bom, raw_cost = load_excel(file_bytes)
@@ -4658,10 +4837,17 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                 lambda x: x.date() if pd.notna(x) else None
                             )
 
+                        rule_editor_height = calc_table_height(
+                            rule_default_display if not rule_default_display.empty else pd.DataFrame(index=range(2)),
+                            min_rows=2,
+                            max_rows=max(2, min(len(rule_default_display), 6))
+                        )
+
                         price_rule_df = st.data_editor(
                             rule_default_display,
                             key=f"quote_ref_price_rule_editor_{selected_quote_product}",
                             use_container_width=True,
+                            height=rule_editor_height,
                             hide_index=True,
                             num_rows="dynamic",
                             column_config={
@@ -4839,11 +5025,9 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                         "제조원가Ⅱ": _fmt_value(cost_info.get("제조원가Ⅱ(㎡)"), 1),
                                     },
                                 ], columns=card_columns)
-                            clean_and_safe_display(
+                            render_compact_html_table(
                                 cost_display,
-                                pinned_cols=["구분", "품목코드"],
-                                text_cols=list(cost_display.columns),
-                                height=calc_table_height(cost_display, min_rows=2, max_rows=2),
+                                height=calc_table_height(cost_display, min_rows=2, max_rows=2) + 18,
                                 column_width_overrides={
                                     "구분": 80,
                                     "품목코드": 145,
@@ -4857,6 +5041,7 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                     "제조원가Ⅰ": 84,
                                     "제조원가Ⅱ": 84,
                                 },
+                                center_cols=list(cost_display.columns),
                             )
 
                             reco_cols = [
@@ -5224,7 +5409,8 @@ if active_main_tab == "🧾 원자재 원가 조회":
         if raw_ref_df.empty:
             st.info("원자재_원가 시트 데이터가 없습니다.")
         else:
-            view_lookup, view_compare, view_product = st.tabs(["원자재 검색", "원자재 비교", "제품 연계 비교"])
+            raw_option_maps = build_raw_material_option_maps(raw_ref_df)
+            view_lookup, view_compare, view_product, view_custom = st.tabs(["원자재 검색", "원자재 비교", "제품 연계 비교", "맞춤 BOM 비교"])
 
             with view_lookup:
                 f1, f2 = st.columns([1, 1.4])
@@ -5239,17 +5425,32 @@ if active_main_tab == "🧾 원자재 원가 조회":
                 if keyword_norm:
                     filtered_raw = filtered_raw[filtered_raw["검색키"].astype(str).str.contains(keyword_norm, na=False)].copy()
                 st.markdown("#### 원자재 단가 목록")
-                clean_and_safe_display(
-                    filtered_raw[["구분", "자재명", "원가(㎡)", "합지속도(mpm)"]] if not filtered_raw.empty else pd.DataFrame(columns=["구분", "자재명", "원가(㎡)", "합지속도(mpm)"]),
-                    pinned_cols=["구분", "자재명"],
-                    text_cols=["구분", "자재명"],
-                    height=calc_table_height(filtered_raw, min_rows=3, max_rows=12),
+                search_view_df = filtered_raw[["구분", "자재명", "원가(㎡)", "합지속도(mpm)"]] if not filtered_raw.empty else pd.DataFrame(columns=["구분", "자재명", "원가(㎡)", "합지속도(mpm)"])
+                metric_count = len(search_view_df)
+                avg_cost = pd.to_numeric(search_view_df.get("원가(㎡)"), errors="coerce").mean() if metric_count > 0 else np.nan
+                min_cost = pd.to_numeric(search_view_df.get("원가(㎡)"), errors="coerce").min() if metric_count > 0 else np.nan
+                avg_speed = pd.to_numeric(search_view_df.get("합지속도(mpm)"), errors="coerce").replace(0, np.nan).mean() if metric_count > 0 else np.nan
+                m1, m2, m3, m4 = st.columns(4)
+                with m1:
+                    st.metric("검색 결과", f"{metric_count:,}")
+                with m2:
+                    st.metric("평균 원가(㎡)", "-" if pd.isna(avg_cost) else f"{avg_cost:,.1f}")
+                with m3:
+                    st.metric("최저 원가(㎡)", "-" if pd.isna(min_cost) else f"{min_cost:,.1f}")
+                with m4:
+                    st.metric("평균 합지속도", "-" if pd.isna(avg_speed) else f"{avg_speed:,.1f}")
+                st.caption("추천 구성: 검색 결과는 상단 요약지표 + 하단 압축형 테이블 구조로 재배치했습니다. 원가·속도 숫자는 폭을 줄이고 가운데 정렬해 빠르게 비교할 수 있습니다.")
+                render_compact_html_table(
+                    search_view_df,
+                    height=max(260, calc_table_height(search_view_df, min_rows=5, max_rows=10) + 36),
                     column_width_overrides={
-                        "구분": 80,
-                        "자재명": 160,
-                        "원가(㎡)": 90,
-                        "합지속도(mpm)": 100,
+                        "구분": 90,
+                        "자재명": 190,
+                        "원가(㎡)": 82,
+                        "합지속도(mpm)": 96,
                     },
+                    center_cols=["구분", "원가(㎡)", "합지속도(mpm)"],
+                    empty_message="조건에 맞는 원자재가 없습니다.",
                 )
 
             with view_compare:
@@ -5385,7 +5586,168 @@ if active_main_tab == "🧾 원자재 원가 조회":
                             )
                             if pd.notna(recent_price_ref):
                                 st.caption(f"참고: 최근 판매단가 비교 기준은 선택 품목의 거래처별 최근단가 중앙값 {recent_price_ref:,.0f}원/㎡ 입니다.")
-            st.caption("추천 활용: ① 원자재 검색에서 단가를 찾고, ② 원자재 비교에서 옥그·황박90 같은 자재 차이를 확인하고, ③ 제품 연계 비교에서 기존 품목 제조원가/영업이익률이 얼마나 달라지는지 함께 판단하세요.")
+            with view_custom:
+                st.markdown("#### 맞춤 BOM 비교")
+                st.caption("신규 제품 견적 초안이나 기존 제품 대체안 비교용입니다. 좌우 각각 기존 품목을 그대로 불러오거나, 신규 BOM을 직접 구성한 뒤 제조원가Ⅰ/Ⅱ와 구성요소를 비교할 수 있습니다.")
+                custom_product_options = sorted(cost_lookup["품목코드"].dropna().astype(str).unique().tolist()) if (not cost_lookup.empty and "품목코드" in cost_lookup.columns) else []
+
+                left_col, right_col = st.columns(2)
+
+                def _render_case_builder(side_prefix, title):
+                    st.markdown(f"##### {title}")
+                    mode = st.radio(
+                        "구성 방식",
+                        options=["기존 품목 불러오기", "신규 구성"],
+                        horizontal=True,
+                        key=f"{side_prefix}_mode"
+                    )
+                    if mode == "기존 품목 불러오기" and custom_product_options:
+                        product_code = st.selectbox(
+                            "품목코드",
+                            options=custom_product_options,
+                            key=f"{side_prefix}_existing_product"
+                        )
+                        cost_row = cost_lookup[cost_lookup["품목코드"].astype(str) == str(product_code)].head(1)
+                        summary = summarize_existing_bom_case(product_code, cost_row)
+                    else:
+                        case_name = st.text_input("비교 표시명", value=f"{title} 신규 구성", key=f"{side_prefix}_case_name")
+                        paper_options = [""] + raw_option_maps.get("원지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                        liner_options = [""] + raw_option_maps.get("이형지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                        adh_options = [""] + raw_option_maps.get("점착제", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                        lam_options = [""] + raw_option_maps.get("합지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                        cut_options = [""] + raw_option_maps.get("재단", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                        s1, s2 = st.columns(2)
+                        with s1:
+                            paper_name = st.selectbox("원지", options=paper_options, key=f"{side_prefix}_paper")
+                            adh_name = st.selectbox("점착제", options=adh_options, key=f"{side_prefix}_adh")
+                            cut_name = st.selectbox("재단공정", options=cut_options, key=f"{side_prefix}_cut")
+                        with s2:
+                            liner_name = st.selectbox("이형지", options=liner_options, key=f"{side_prefix}_liner")
+                            lam_name = st.selectbox("합지공정", options=lam_options, key=f"{side_prefix}_lam")
+                            loss_rate_pct = st.number_input("로스율(%)", min_value=0.0, max_value=100.0, value=3.0, step=0.1, key=f"{side_prefix}_loss_rate")
+                        transport_cost = st.number_input("운송판관비(㎡)", min_value=0.0, value=50.0, step=1.0, key=f"{side_prefix}_transport")
+                        summary = summarize_custom_bom_case(
+                            case_name,
+                            {"원지": paper_name, "이형지": liner_name, "점착제": adh_name, "합지": lam_name, "재단": cut_name},
+                            loss_rate_pct,
+                            transport_cost,
+                            raw_option_maps,
+                        )
+                    metric_cols = st.columns(4)
+                    with metric_cols[0]:
+                        st.metric("원자재합계", "-" if pd.isna(summary.get("원자재합계")) else f"{summary.get('원자재합계'):,.1f}")
+                    with metric_cols[1]:
+                        st.metric("로스원가", "-" if pd.isna(summary.get("로스원가")) else f"{summary.get('로스원가'):,.1f}")
+                    with metric_cols[2]:
+                        st.metric("제조원가Ⅰ", "-" if pd.isna(summary.get("제조원가Ⅰ")) else f"{summary.get('제조원가Ⅰ'):,.1f}")
+                    with metric_cols[3]:
+                        st.metric("제조원가Ⅱ", "-" if pd.isna(summary.get("제조원가Ⅱ")) else f"{summary.get('제조원가Ⅱ'):,.1f}")
+                    return summary
+
+                with left_col:
+                    left_summary = _render_case_builder("custom_bom_left", "비교안 A")
+                with right_col:
+                    right_summary = _render_case_builder("custom_bom_right", "비교안 B")
+
+                compare_metric_cols = st.columns(4)
+                diff_m1 = (right_summary.get("제조원가Ⅰ") - left_summary.get("제조원가Ⅰ")) if pd.notna(left_summary.get("제조원가Ⅰ")) and pd.notna(right_summary.get("제조원가Ⅰ")) else np.nan
+                diff_m2 = (right_summary.get("제조원가Ⅱ") - left_summary.get("제조원가Ⅱ")) if pd.notna(left_summary.get("제조원가Ⅱ")) and pd.notna(right_summary.get("제조원가Ⅱ")) else np.nan
+                diff_raw = (right_summary.get("원자재합계") - left_summary.get("원자재합계")) if pd.notna(left_summary.get("원자재합계")) and pd.notna(right_summary.get("원자재합계")) else np.nan
+                diff_loss = (right_summary.get("로스원가") - left_summary.get("로스원가")) if pd.notna(left_summary.get("로스원가")) and pd.notna(right_summary.get("로스원가")) else np.nan
+                with compare_metric_cols[0]:
+                    st.metric("원자재합계 차이(B-A)", "-" if pd.isna(diff_raw) else f"{diff_raw:,.1f}")
+                with compare_metric_cols[1]:
+                    st.metric("로스원가 차이(B-A)", "-" if pd.isna(diff_loss) else f"{diff_loss:,.1f}")
+                with compare_metric_cols[2]:
+                    st.metric("제조원가Ⅰ 차이(B-A)", "-" if pd.isna(diff_m1) else f"{diff_m1:,.1f}")
+                with compare_metric_cols[3]:
+                    st.metric("제조원가Ⅱ 차이(B-A)", "-" if pd.isna(diff_m2) else f"{diff_m2:,.1f}")
+
+                case_summary_df = pd.DataFrame([
+                    {
+                        "구분": "비교안 A",
+                        "표시명": left_summary.get("구성명", ""),
+                        "품목코드": left_summary.get("품목코드", ""),
+                        "원지": left_summary.get("원지", ""),
+                        "이형지": left_summary.get("이형지", ""),
+                        "점착제": left_summary.get("점착제", ""),
+                        "합지공정": left_summary.get("합지공정", ""),
+                        "재단공정": left_summary.get("재단공정", ""),
+                        "원자재합계": left_summary.get("원자재합계", np.nan),
+                        "로스율(%)": left_summary.get("로스율(%)", np.nan),
+                        "로스원가": left_summary.get("로스원가", np.nan),
+                        "운송판관비": left_summary.get("운송판관비", np.nan),
+                        "제조원가Ⅰ": left_summary.get("제조원가Ⅰ", np.nan),
+                        "제조원가Ⅱ": left_summary.get("제조원가Ⅱ", np.nan),
+                    },
+                    {
+                        "구분": "비교안 B",
+                        "표시명": right_summary.get("구성명", ""),
+                        "품목코드": right_summary.get("품목코드", ""),
+                        "원지": right_summary.get("원지", ""),
+                        "이형지": right_summary.get("이형지", ""),
+                        "점착제": right_summary.get("점착제", ""),
+                        "합지공정": right_summary.get("합지공정", ""),
+                        "재단공정": right_summary.get("재단공정", ""),
+                        "원자재합계": right_summary.get("원자재합계", np.nan),
+                        "로스율(%)": right_summary.get("로스율(%)", np.nan),
+                        "로스원가": right_summary.get("로스원가", np.nan),
+                        "운송판관비": right_summary.get("운송판관비", np.nan),
+                        "제조원가Ⅰ": right_summary.get("제조원가Ⅰ", np.nan),
+                        "제조원가Ⅱ": right_summary.get("제조원가Ⅱ", np.nan),
+                    },
+                ])
+                st.markdown("##### 구성 요약")
+                render_compact_html_table(
+                    case_summary_df,
+                    height=176,
+                    column_width_overrides={
+                        "구분": 78,
+                        "표시명": 150,
+                        "품목코드": 120,
+                        "원지": 88,
+                        "이형지": 88,
+                        "점착제": 88,
+                        "합지공정": 88,
+                        "재단공정": 88,
+                        "원자재합계": 88,
+                        "로스율(%)": 80,
+                        "로스원가": 88,
+                        "운송판관비": 88,
+                        "제조원가Ⅰ": 88,
+                        "제조원가Ⅱ": 88,
+                    },
+                    center_cols=["구분", "원자재합계", "로스율(%)", "로스원가", "운송판관비", "제조원가Ⅰ", "제조원가Ⅱ"],
+                )
+
+                component_compare_df = pd.DataFrame([
+                    {"항목": "원지", "비교안 A": f"{left_summary.get('원지','')} / {_fmt_value(left_summary.get('원지원가'), 1)}", "비교안 B": f"{right_summary.get('원지','')} / {_fmt_value(right_summary.get('원지원가'), 1)}", "원가차이(B-A)": (right_summary.get("원지원가") - left_summary.get("원지원가")) if pd.notna(left_summary.get("원지원가")) and pd.notna(right_summary.get("원지원가")) else np.nan},
+                    {"항목": "이형지", "비교안 A": f"{left_summary.get('이형지','')} / {_fmt_value(left_summary.get('이형지원가'), 1)}", "비교안 B": f"{right_summary.get('이형지','')} / {_fmt_value(right_summary.get('이형지원가'), 1)}", "원가차이(B-A)": (right_summary.get("이형지원가") - left_summary.get("이형지원가")) if pd.notna(left_summary.get("이형지원가")) and pd.notna(right_summary.get("이형지원가")) else np.nan},
+                    {"항목": "점착제", "비교안 A": f"{left_summary.get('점착제','')} / {_fmt_value(left_summary.get('점착제원가'), 1)}", "비교안 B": f"{right_summary.get('점착제','')} / {_fmt_value(right_summary.get('점착제원가'), 1)}", "원가차이(B-A)": (right_summary.get("점착제원가") - left_summary.get("점착제원가")) if pd.notna(left_summary.get("점착제원가")) and pd.notna(right_summary.get("점착제원가")) else np.nan},
+                    {"항목": "합지공정", "비교안 A": f"{left_summary.get('합지공정','')} / {_fmt_value(left_summary.get('합지원가'), 1)}", "비교안 B": f"{right_summary.get('합지공정','')} / {_fmt_value(right_summary.get('합지원가'), 1)}", "원가차이(B-A)": (right_summary.get("합지원가") - left_summary.get("합지원가")) if pd.notna(left_summary.get("합지원가")) and pd.notna(right_summary.get("합지원가")) else np.nan},
+                    {"항목": "재단공정", "비교안 A": f"{left_summary.get('재단공정','')} / {_fmt_value(left_summary.get('재단원가'), 1)}", "비교안 B": f"{right_summary.get('재단공정','')} / {_fmt_value(right_summary.get('재단원가'), 1)}", "원가차이(B-A)": (right_summary.get("재단원가") - left_summary.get("재단원가")) if pd.notna(left_summary.get("재단원가")) and pd.notna(right_summary.get("재단원가")) else np.nan},
+                    {"항목": "합지속도(mpm)", "비교안 A": _fmt_value(left_summary.get('합지속도(mpm)'), 1), "비교안 B": _fmt_value(right_summary.get('합지속도(mpm)'), 1), "원가차이(B-A)": np.nan},
+                    {"항목": "원자재합계", "비교안 A": _fmt_value(left_summary.get('원자재합계'), 1), "비교안 B": _fmt_value(right_summary.get('원자재합계'), 1), "원가차이(B-A)": diff_raw},
+                    {"항목": "로스율(%)", "비교안 A": _fmt_value(left_summary.get('로스율(%)'), 1), "비교안 B": _fmt_value(right_summary.get('로스율(%)'), 1), "원가차이(B-A)": np.nan},
+                    {"항목": "로스원가", "비교안 A": _fmt_value(left_summary.get('로스원가'), 1), "비교안 B": _fmt_value(right_summary.get('로스원가'), 1), "원가차이(B-A)": diff_loss},
+                    {"항목": "운송판관비", "비교안 A": _fmt_value(left_summary.get('운송판관비'), 1), "비교안 B": _fmt_value(right_summary.get('운송판관비'), 1), "원가차이(B-A)": (right_summary.get("운송판관비") - left_summary.get("운송판관비")) if pd.notna(left_summary.get("운송판관비")) and pd.notna(right_summary.get("운송판관비")) else np.nan},
+                    {"항목": "제조원가Ⅰ", "비교안 A": _fmt_value(left_summary.get('제조원가Ⅰ'), 1), "비교안 B": _fmt_value(right_summary.get('제조원가Ⅰ'), 1), "원가차이(B-A)": diff_m1},
+                    {"항목": "제조원가Ⅱ", "비교안 A": _fmt_value(left_summary.get('제조원가Ⅱ'), 1), "비교안 B": _fmt_value(right_summary.get('제조원가Ⅱ'), 1), "원가차이(B-A)": diff_m2},
+                ])
+                st.markdown("##### 구성요소 상세 비교")
+                render_compact_html_table(
+                    component_compare_df,
+                    height=420,
+                    column_width_overrides={
+                        "항목": 110,
+                        "비교안 A": 220,
+                        "비교안 B": 220,
+                        "원가차이(B-A)": 110,
+                    },
+                    center_cols=["항목", "원가차이(B-A)"],
+                )
+
+            st.caption("추천 활용: ① 원자재 검색에서 단가를 찾고, ② 원자재 비교에서 옥그·황박90 같은 자재 차이를 확인하고, ③ 제품 연계 비교 또는 맞춤 BOM 비교에서 기존/신규 구성의 제조원가 변화를 함께 판단하세요.")
 
 if active_main_tab == "📉 매출 하락 분석":
     if lazy_tabs_enabled and lazy_active_tab != "📉 매출 하락 분석":
@@ -6655,8 +7017,8 @@ if active_main_tab == "📊 거래처통합분석":
                             )
 
                             raw_cols = [c for c in [
-                                "날짜", "거래처", "품목코드", "품목명(공식)", "품목표시",
-                                "점착제코드", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "비고"
+                                "날짜", "거래처", "품목코드", "점착제코드", "가로폭(mm)", "길이(m)",
+                                "수량(M2)", "단가(원/M2)", "금액(원)", "비고"
                             ] if c in integrated_raw_df.columns]
 
                             raw_df = integrated_raw_df.copy()
@@ -6742,15 +7104,14 @@ if active_main_tab == "📊 거래처통합분석":
                                 clean_and_safe_display(
                                     raw_df[raw_cols],
                                     pinned_cols=["날짜", "거래처", "품목코드"],
-                                    text_cols=["날짜", "거래처", "품목코드", "품목명(공식)", "품목표시", "점착제코드", "비고"],
+                                    text_cols=["날짜", "거래처", "품목코드", "점착제코드", "비고"],
                                     column_width_overrides={
                                         "날짜": 95,
                                         "거래처": 145,
                                         "품목코드": 145,
-                                        "품목명(공식)": 180,
-                                        "품목표시": 180,
                                         "점착제코드": 80,
                                         "가로폭(mm)": 80,
+                                        "길이(m)": 80,
                                         "수량(M2)": 90,
                                         "단가(원/M2)": 85,
                                         "금액(원)": 95,
@@ -7658,7 +8019,7 @@ if active_main_tab == "🗂️ 원자료":
             st.subheader("원자료(필터 적용됨)")
             raw_priority_cols = [
                 "날짜", "거래처", "담당부서", "영업담당부서", "담당자", "재단구분",
-                "품목코드", "점착제코드", "점착제명", "기준폭", "가로폭(mm)", "가로폭이력",
+                "품목코드", "점착제코드", "점착제명", "기준폭", "가로폭(mm)", "길이(m)", "가로폭이력",
                 "수량(M2)", "단가(원/M2)", "금액(원)", "최근날짜", "최근단가", "비고"
             ]
             raw_cols = [c for c in raw_priority_cols if c in q.columns and c != "품목명(공식)"]
@@ -7700,6 +8061,7 @@ if active_main_tab == "🗂️ 원자료":
                     "점착제명": 120,
                     "기준폭": 90,
                     "가로폭(mm)": 90,
+                    "길이(m)": 90,
                     "가로폭이력": 220,
                     "수량(M2)": 90,
                     "단가(원/M2)": 95,
