@@ -5725,7 +5725,6 @@ if active_main_tab == "🧾 원자재 원가 조회":
                         )
                         summary["구성명"] = preview_code
                         summary["품목코드"] = preview_code
-                        st.session_state[f"{side_prefix}_new_code_view"] = preview_code
 
                     metric_cols = st.columns(4)
                     with metric_cols[0]:
