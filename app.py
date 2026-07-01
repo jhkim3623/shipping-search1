@@ -5591,6 +5591,19 @@ if active_main_tab == "🧾 원자재 원가 조회":
                 st.caption("신규 제품 견적 초안이나 기존 제품 대체안 비교용입니다. 좌우 각각 기존 품목을 그대로 불러오거나, 신규 BOM을 직접 구성한 뒤 제조원가Ⅰ/Ⅱ와 구성요소를 비교할 수 있습니다.")
                 custom_product_options = sorted(cost_lookup["품목코드"].dropna().astype(str).unique().tolist()) if (not cost_lookup.empty and "품목코드" in cost_lookup.columns) else []
 
+                def _build_custom_product_code(paper_name, liner_name, adh_name):
+                    paper_name = str(paper_name or "").strip()
+                    liner_name = str(liner_name or "").strip()
+                    adh_name = str(adh_name or "").strip()
+                    base_name = f"{paper_name}{liner_name}" if (paper_name or liner_name) else ""
+                    if base_name and adh_name:
+                        return f"{base_name}/{adh_name}"
+                    if base_name:
+                        return base_name
+                    if adh_name:
+                        return adh_name
+                    return "신규 구성"
+
                 left_col, right_col = st.columns(2)
 
                 def _render_case_builder(side_prefix, title):
@@ -5605,103 +5618,89 @@ if active_main_tab == "🧾 원자재 원가 조회":
                     existing_mode = (mode == "기존 품목 불러오기" and custom_product_options)
                     summary = {}
 
+                    paper_options = [""] + raw_option_maps.get("원지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                    liner_options = [""] + raw_option_maps.get("이형지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                    adh_options = [""] + raw_option_maps.get("점착제", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                    lam_options = [""] + raw_option_maps.get("합지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+                    cut_options = [""] + raw_option_maps.get("재단", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
+
                     if existing_mode:
                         product_code = st.selectbox(
-                            "품목코드 선택",
+                            "품목코드",
                             options=custom_product_options,
                             key=f"{side_prefix}_existing_product"
                         )
                         cost_row = cost_lookup[cost_lookup["품목코드"].astype(str) == str(product_code)].head(1)
                         summary = summarize_existing_bom_case(product_code, cost_row)
+                        summary["구성명"] = str(summary.get("품목코드", "") or "")
+                    else:
+                        preview_code = _build_custom_product_code(
+                            st.session_state.get(f"{side_prefix}_paper", ""),
+                            st.session_state.get(f"{side_prefix}_liner", ""),
+                            st.session_state.get(f"{side_prefix}_adh", ""),
+                        )
+                        st.text_input(
+                            "품목코드",
+                            value=preview_code,
+                            key=f"{side_prefix}_new_code_view",
+                            disabled=True,
+                        )
 
-                        meta_c1, meta_c2 = st.columns(2)
-                        with meta_c1:
-                            st.text_input(
-                                "비교 표시명",
-                                value=str(summary.get("구성명", product_code) or ""),
-                                key=f"{side_prefix}_existing_case_name_view",
-                                disabled=True,
-                            )
-                        with meta_c2:
-                            st.text_input(
-                                "품목코드",
-                                value=str(product_code or ""),
-                                key=f"{side_prefix}_existing_code_view",
-                                disabled=True,
-                            )
-
-                        row1_c1, row1_c2 = st.columns(2)
+                    row1_c1, row1_c2 = st.columns(2)
+                    if existing_mode:
                         with row1_c1:
                             st.text_input("원지", value=str(summary.get("원지", "") or ""), key=f"{side_prefix}_existing_paper_view", disabled=True)
                         with row1_c2:
                             st.text_input("이형지", value=str(summary.get("이형지", "") or ""), key=f"{side_prefix}_existing_liner_view", disabled=True)
-
-                        row2_c1, row2_c2 = st.columns(2)
-                        with row2_c1:
-                            st.text_input("점착제", value=str(summary.get("점착제", "") or ""), key=f"{side_prefix}_existing_adh_view", disabled=True)
-                        with row2_c2:
-                            st.text_input("합지공정", value=str(summary.get("합지공정", "") or ""), key=f"{side_prefix}_existing_lam_view", disabled=True)
-
-                        row3_c1, row3_c2 = st.columns(2)
-                        with row3_c1:
-                            st.text_input("재단공정", value=str(summary.get("재단공정", "") or ""), key=f"{side_prefix}_existing_cut_view", disabled=True)
-                        with row3_c2:
-                            st.text_input("로스율(%)", value=_fmt_value(summary.get("로스율(%)"), 1), key=f"{side_prefix}_existing_loss_view", disabled=True)
-
-                        row4_c1, row4_c2 = st.columns(2)
-                        with row4_c1:
-                            st.text_input("운송판관비(㎡)", value=_fmt_value(summary.get("운송판관비"), 1), key=f"{side_prefix}_existing_transport_view", disabled=True)
-                        with row4_c2:
-                            st.text_input("합지속도(mpm)", value=_fmt_value(summary.get("합지속도(mpm)"), 1), key=f"{side_prefix}_existing_speed_view", disabled=True)
                     else:
-                        meta_c1, meta_c2 = st.columns(2)
-                        with meta_c1:
-                            case_name = st.text_input("비교 표시명", value=f"{title} 신규 구성", key=f"{side_prefix}_case_name")
-                        with meta_c2:
-                            st.text_input("품목코드", value="신규 구성", key=f"{side_prefix}_new_code_view", disabled=True)
-
-                        paper_options = [""] + raw_option_maps.get("원지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
-                        liner_options = [""] + raw_option_maps.get("이형지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
-                        adh_options = [""] + raw_option_maps.get("점착제", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
-                        lam_options = [""] + raw_option_maps.get("합지", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
-                        cut_options = [""] + raw_option_maps.get("재단", pd.DataFrame()).get("자재명", pd.Series(dtype=str)).dropna().astype(str).tolist()
-
-                        row1_c1, row1_c2 = st.columns(2)
                         with row1_c1:
                             paper_name = st.selectbox("원지", options=paper_options, key=f"{side_prefix}_paper")
                         with row1_c2:
                             liner_name = st.selectbox("이형지", options=liner_options, key=f"{side_prefix}_liner")
 
-                        row2_c1, row2_c2 = st.columns(2)
+                    row2_c1, row2_c2 = st.columns(2)
+                    if existing_mode:
+                        with row2_c1:
+                            st.text_input("점착제", value=str(summary.get("점착제", "") or ""), key=f"{side_prefix}_existing_adh_view", disabled=True)
+                        with row2_c2:
+                            st.text_input("합지공정", value=str(summary.get("합지공정", "") or ""), key=f"{side_prefix}_existing_lam_view", disabled=True)
+                    else:
                         with row2_c1:
                             adh_name = st.selectbox("점착제", options=adh_options, key=f"{side_prefix}_adh")
                         with row2_c2:
                             lam_name = st.selectbox("합지공정", options=lam_options, key=f"{side_prefix}_lam")
 
-                        row3_c1, row3_c2 = st.columns(2)
+                    row3_c1, row3_c2 = st.columns(2)
+                    if existing_mode:
+                        with row3_c1:
+                            st.text_input("재단공정", value=str(summary.get("재단공정", "") or ""), key=f"{side_prefix}_existing_cut_view", disabled=True)
+                        with row3_c2:
+                            st.text_input("로스율(%)", value=_fmt_value(summary.get("로스율(%)"), 1), key=f"{side_prefix}_existing_loss_view", disabled=True)
+                    else:
                         with row3_c1:
                             cut_name = st.selectbox("재단공정", options=cut_options, key=f"{side_prefix}_cut")
                         with row3_c2:
                             loss_rate_pct = st.number_input("로스율(%)", min_value=0.0, max_value=100.0, value=3.0, step=0.1, key=f"{side_prefix}_loss_rate")
 
-                        summary = summarize_custom_bom_case(
-                            case_name,
-                            {"원지": paper_name, "이형지": liner_name, "점착제": adh_name, "합지": lam_name, "재단": cut_name},
-                            loss_rate_pct,
-                            st.session_state.get(f"{side_prefix}_transport", 50.0),
-                            raw_option_maps,
-                        )
-
-                        row4_c1, row4_c2 = st.columns(2)
+                    row4_c1, row4_c2 = st.columns(2)
+                    if existing_mode:
+                        with row4_c1:
+                            st.text_input("운송판관비(㎡)", value=_fmt_value(summary.get("운송판관비"), 1), key=f"{side_prefix}_existing_transport_view", disabled=True)
+                        with row4_c2:
+                            st.text_input("합지속도(mpm)", value=_fmt_value(summary.get("합지속도(mpm)"), 1), key=f"{side_prefix}_existing_speed_view", disabled=True)
+                    else:
                         with row4_c1:
                             transport_cost = st.number_input("운송판관비(㎡)", min_value=0.0, value=float(st.session_state.get(f"{side_prefix}_transport", 50.0) or 50.0), step=1.0, key=f"{side_prefix}_transport")
+                        preview_code = _build_custom_product_code(paper_name, liner_name, adh_name)
                         summary = summarize_custom_bom_case(
-                            case_name,
+                            preview_code,
                             {"원지": paper_name, "이형지": liner_name, "점착제": adh_name, "합지": lam_name, "재단": cut_name},
                             loss_rate_pct,
                             transport_cost,
                             raw_option_maps,
                         )
+                        summary["구성명"] = preview_code
+                        summary["품목코드"] = preview_code
                         with row4_c2:
                             st.text_input("합지속도(mpm)", value=_fmt_value(summary.get("합지속도(mpm)"), 1), key=f"{side_prefix}_new_speed_view", disabled=True)
 
@@ -5737,7 +5736,6 @@ if active_main_tab == "🧾 원자재 원가 조회":
 
                 case_summary_df = pd.DataFrame([
                     {
-                        "구분": "비교안 A",
                         "품목코드": left_summary.get("품목코드", ""),
                         "제조원가Ⅰ": left_summary.get("제조원가Ⅰ", np.nan),
                         "제조원가Ⅱ": left_summary.get("제조원가Ⅱ", np.nan),
@@ -5752,7 +5750,6 @@ if active_main_tab == "🧾 원자재 원가 조회":
                         "운송판관비": left_summary.get("운송판관비", np.nan),
                     },
                     {
-                        "구분": "비교안 B",
                         "품목코드": right_summary.get("품목코드", ""),
                         "제조원가Ⅰ": right_summary.get("제조원가Ⅰ", np.nan),
                         "제조원가Ⅱ": right_summary.get("제조원가Ⅱ", np.nan),
@@ -5768,12 +5765,12 @@ if active_main_tab == "🧾 원자재 원가 조회":
                     },
                 ])
                 st.markdown("##### 구성 요약")
+                st.caption("행 순서: 1행 비교안 A · 2행 비교안 B")
                 render_compact_html_table(
                     case_summary_df,
                     height=176,
                     column_width_overrides={
-                        "구분": 78,
-                        "품목코드": 120,
+                        "품목코드": 150,
                         "제조원가Ⅰ": 88,
                         "제조원가Ⅱ": 88,
                         "원지": 88,
@@ -5786,7 +5783,7 @@ if active_main_tab == "🧾 원자재 원가 조회":
                         "로스원가": 88,
                         "운송판관비": 88,
                     },
-                    center_cols=["구분", "제조원가Ⅰ", "제조원가Ⅱ", "원자재합계", "로스율(%)", "로스원가", "운송판관비"],
+                    center_cols=["제조원가Ⅰ", "제조원가Ⅱ", "원자재합계", "로스율(%)", "로스원가", "운송판관비"],
                 )
 
                 component_compare_df = pd.DataFrame([
