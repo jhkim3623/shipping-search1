@@ -5618,10 +5618,16 @@ if active_main_tab == "🧾 원자재 원가 조회":
                         return np.nan
                     return pd.to_numeric(row[field], errors="coerce").iloc[0]
 
-                def _readonly_input(label, value, key):
+                def _readonly_select(label, value, key):
                     display_value = "" if value is None or pd.isna(value) else str(value)
-                    st.session_state[key] = display_value
-                    return st.text_input(label, key=key, disabled=True)
+                    options = [display_value] if display_value else [""]
+                    return st.selectbox(label, options=options, index=0, key=key, disabled=True)
+
+                def _readonly_number(label, value, key, step=1.0, fmt="%.1f"):
+                    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+                    if pd.isna(numeric_value):
+                        numeric_value = 0.0
+                    return st.number_input(label, value=float(numeric_value), step=float(step), format=fmt, key=key, disabled=True)
 
                 left_col, right_col = st.columns(2)
 
@@ -5658,14 +5664,14 @@ if active_main_tab == "🧾 원자재 원가 조회":
                             st.session_state.get(f"{side_prefix}_liner", ""),
                             st.session_state.get(f"{side_prefix}_adh", ""),
                         )
-                        _readonly_input("품목코드", preview_code, f"{side_prefix}_new_code_view")
+                        _readonly_select("품목코드", preview_code, f"{side_prefix}_new_code_view")
 
                     row1_c1, row1_c2 = st.columns(2)
                     if existing_mode:
                         with row1_c1:
-                            _readonly_input("원지", summary.get("원지", ""), f"{side_prefix}_existing_paper_view")
+                            _readonly_select("원지", summary.get("원지", ""), f"{side_prefix}_existing_paper_view")
                         with row1_c2:
-                            _readonly_input("이형지", summary.get("이형지", ""), f"{side_prefix}_existing_liner_view")
+                            _readonly_select("이형지", summary.get("이형지", ""), f"{side_prefix}_existing_liner_view")
                     else:
                         with row1_c1:
                             paper_name = st.selectbox("원지", options=paper_options, key=f"{side_prefix}_paper")
@@ -5675,9 +5681,9 @@ if active_main_tab == "🧾 원자재 원가 조회":
                     row2_c1, row2_c2 = st.columns(2)
                     if existing_mode:
                         with row2_c1:
-                            _readonly_input("점착제", summary.get("점착제", ""), f"{side_prefix}_existing_adh_view")
+                            _readonly_select("점착제", summary.get("점착제", ""), f"{side_prefix}_existing_adh_view")
                         with row2_c2:
-                            _readonly_input("합지공정", summary.get("합지공정", ""), f"{side_prefix}_existing_lam_view")
+                            _readonly_select("합지공정", summary.get("합지공정", ""), f"{side_prefix}_existing_lam_view")
                     else:
                         with row2_c1:
                             adh_name = st.selectbox("점착제", options=adh_options, key=f"{side_prefix}_adh")
@@ -5687,9 +5693,9 @@ if active_main_tab == "🧾 원자재 원가 조회":
                     row3_c1, row3_c2 = st.columns(2)
                     if existing_mode:
                         with row3_c1:
-                            _readonly_input("재단공정", summary.get("재단공정", ""), f"{side_prefix}_existing_cut_view")
+                            _readonly_select("재단공정", summary.get("재단공정", ""), f"{side_prefix}_existing_cut_view")
                         with row3_c2:
-                            _readonly_input("로스율(%)", _fmt_value(summary.get("로스율(%)"), 1), f"{side_prefix}_existing_loss_view")
+                            _readonly_number("로스율(%)", summary.get("로스율(%)"), f"{side_prefix}_existing_loss_view", step=0.1, fmt="%.1f")
                     else:
                         with row3_c1:
                             cut_name = st.selectbox("재단공정", options=cut_options, key=f"{side_prefix}_cut")
@@ -5699,9 +5705,9 @@ if active_main_tab == "🧾 원자재 원가 조회":
                     row4_c1, row4_c2 = st.columns(2)
                     if existing_mode:
                         with row4_c1:
-                            _readonly_input("운송판관비(㎡)", _fmt_value(summary.get("운송판관비"), 1), f"{side_prefix}_existing_transport_view")
+                            _readonly_number("운송판관비(㎡)", summary.get("운송판관비"), f"{side_prefix}_existing_transport_view", step=1.0, fmt="%.1f")
                         with row4_c2:
-                            _readonly_input("합지속도(mpm)", _fmt_value(summary.get("합지속도(mpm)"), 1), f"{side_prefix}_existing_speed_view")
+                            _readonly_number("합지속도(mpm)", summary.get("합지속도(mpm)"), f"{side_prefix}_existing_speed_view", step=1.0, fmt="%.1f")
                     else:
                         default_speed = _get_raw_option_value("합지", st.session_state.get(f"{side_prefix}_lam", ""), "합지속도(mpm)")
                         speed_key = f"{side_prefix}_lam_speed_input"
