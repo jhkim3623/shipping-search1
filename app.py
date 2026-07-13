@@ -2318,6 +2318,11 @@ def build_analysis_cache(q, selected_end_date=None, cutoff_day=20):
     product_monthly["날짜축"] = pd.to_datetime(product_monthly["월"] + "-01")
     product_monthly["만원라벨"] = product_monthly["금액(원)"].apply(sales_to_manwon_label)
 
+    df = optimize_dataframe_memory(df)
+    monthly_sales = optimize_dataframe_memory(monthly_sales)
+    customer_total_monthly = optimize_dataframe_memory(customer_total_monthly)
+    product_monthly = optimize_dataframe_memory(product_monthly)
+
     all_months = sorted(df["월"].unique().tolist())
     return df, monthly_sales, customer_total_monthly, product_monthly, all_months
 
@@ -3518,6 +3523,12 @@ def build_return_decline_item_analysis(q):
         ).reset_index(drop=True)
         item_rank["순위"] = range(1, len(item_rank) + 1)
 
+    item_rank = optimize_dataframe_memory(item_rank)
+    item_monthly = optimize_dataframe_memory(item_monthly)
+    item_customer_monthly = optimize_dataframe_memory(item_customer_monthly)
+    return_reason_df = optimize_dataframe_memory(return_reason_df)
+    customer_return_reason_df = optimize_dataframe_memory(customer_return_reason_df)
+
     return {
         "all_months": all_months,
         "first_half": first_half,
@@ -3747,6 +3758,11 @@ def build_growth_item_analysis(q):
     if not growth_customer_summary.empty:
         growth_customer_summary["증가원인"] = growth_customer_summary.apply(infer_customer_item_growth_reason, axis=1)
         growth_customer_summary["AI분석"] = growth_customer_summary.apply(infer_ai_growth_analysis, axis=1)
+
+    item_rank = optimize_dataframe_memory(item_rank)
+    item_monthly = optimize_dataframe_memory(item_monthly)
+    item_customer_monthly = optimize_dataframe_memory(item_customer_monthly)
+    growth_customer_summary = optimize_dataframe_memory(growth_customer_summary)
 
     return {
         "all_months": all_months,
@@ -7616,14 +7632,12 @@ if active_main_tab == "📉 매출 감소 품목 분석":
                             fig_item.add_trace(go.Scatter(
                                 x=item_month_plot["날짜축"],
                                 y=item_month_plot["매출액"],
-                                mode="lines+markers+text",
-                                text=[sales_to_manwon_label(v) for v in item_month_plot["매출액"]],
-                                textposition="top center",
+                                mode="lines+markers",
                                 name="월매출",
                                 line=dict(width=3, color="#1f77b4"),
                                 marker=dict(size=8),
                                 cliponaxis=False,
-                                hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
+                                hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<extra></extra>",
                             ))
                             fig_item = apply_mobile_friendly_line_layout(
                                 fig_item,
@@ -7756,14 +7770,12 @@ if active_main_tab == "📉 매출 감소 품목 분석":
                                     fig_item_customer.add_trace(go.Scatter(
                                         x=selected_customer_month_plot["날짜축"],
                                         y=selected_customer_month_plot["매출액"],
-                                        mode="lines+markers+text",
-                                        text=[sales_to_manwon_label(v) for v in selected_customer_month_plot["매출액"]],
-                                        textposition="top center",
+                                        mode="lines+markers",
                                         name=selected_customer,
                                         line=dict(width=3, color="#1f77b4"),
                                         marker=dict(size=8),
                                         cliponaxis=False,
-                                        hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
+                                        hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<extra></extra>",
                                     ))
                                     fig_item_customer = apply_mobile_friendly_line_layout(
                                         fig_item_customer,
@@ -8024,14 +8036,12 @@ if active_main_tab == "📈 매출 증가 품목 분석":
                             fig_item.add_trace(go.Scatter(
                                 x=item_month_plot["날짜축"],
                                 y=item_month_plot["매출액"],
-                                mode="lines+markers+text",
-                                text=[sales_to_manwon_label(v) for v in item_month_plot["매출액"]],
-                                textposition="top center",
+                                mode="lines+markers",
                                 name="월매출",
                                 line=dict(width=3, color="#1f77b4"),
                                 marker=dict(size=8),
                                 cliponaxis=False,
-                                hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<br>만원: %{text}<extra></extra>",
+                                hovertemplate="월: %{x|%Y-%m}<br>판매금액: %{y:,.0f}원<extra></extra>",
                             ))
                             fig_item = apply_mobile_friendly_line_layout(
                                 fig_item,
