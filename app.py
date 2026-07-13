@@ -935,6 +935,35 @@ def build_sidebar_filter_metadata(df, dept_col=None, manager_col=None):
     return dept_options, manager_options, cust_options, prod_options, adh_options, date_min, date_max
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
+def build_cross_filtered_option_sets(df, prod_query="", adh_query=""):
+    if df is None or df.empty:
+        return [], []
+
+    work = df.copy()
+    if "품목코드" not in work.columns:
+        work["품목코드"] = ""
+    if "점착제코드" not in work.columns:
+        work["점착제코드"] = ""
+
+    work["품목코드"] = to_text_series(work["품목코드"], strip=True)
+    work["점착제코드"] = to_text_series(work["점착제코드"], strip=True)
+
+    prod_q = str(prod_query or "").strip().lower()
+    adh_q = str(adh_query or "").strip().lower()
+
+    mask = pd.Series(True, index=work.index)
+    if prod_q:
+        mask &= work["품목코드"].str.lower().str.contains(prod_q, na=False)
+    if adh_q:
+        mask &= work["점착제코드"].str.lower().str.contains(adh_q, na=False)
+
+    filtered = work.loc[mask]
+    prod_candidates = sorted_unique(filtered["품목코드"]) if "품목코드" in filtered.columns else []
+    adh_candidates = sorted_unique(filtered["점착제코드"]) if "점착제코드" in filtered.columns else []
+    return prod_candidates, adh_candidates
+
+
 def apply_filters(df, dept_col=None, manager_col=None, sel_dept=None, sel_manager=None, sel_cust=None, sel_prod=None, sel_adh=None, start_ts=None, end_ts=None):
     if df is None or df.empty:
         return pd.DataFrame(columns=df.columns if isinstance(df, pd.DataFrame) else None)
@@ -4153,14 +4182,20 @@ if date_max is not None and pd.notna(date_max):
     st.session_state["flt_end_date"] = sanitize_date_state(st.session_state.get("flt_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
     st.session_state["flt_widget_end_date"] = sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
 
+cross_prod_options, cross_adh_options = build_cross_filtered_option_sets(
+    rec,
+    prod_query=st.session_state.get("flt_prod_option_query", ""),
+    adh_query=st.session_state.get("flt_adh_option_query", ""),
+)
+
 prod_display_options, prod_match_count = build_option_view(
-    tuple(prod_options),
+    tuple(cross_prod_options),
     query=st.session_state.get("flt_prod_option_query", ""),
     selected_values=tuple(st.session_state.get("flt_widget_sel_prod", [])),
     limit=200,
 )
 adh_display_options, adh_match_count = build_option_view(
-    tuple(adh_options),
+    tuple(cross_adh_options),
     query=st.session_state.get("flt_adh_option_query", ""),
     selected_values=tuple(st.session_state.get("flt_widget_sel_adh", [])),
     limit=200,
