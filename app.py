@@ -772,7 +772,7 @@ CACHE_DATA_LARGE_MAX_ENTRIES = 2
 CACHE_DATA_MEDIUM_MAX_ENTRIES = 6
 
 
-def optimize_dataframe_memory(df, text_threshold=0.6):
+def optimize_dataframe_memory(df, text_threshold=0.6, category_sample_size=4000):
     if df is None or df.empty:
         return df
 
@@ -786,20 +786,27 @@ def optimize_dataframe_memory(df, text_threshold=0.6):
             out[col] = pd.to_numeric(s, downcast="float")
         elif pd.api.types.is_object_dtype(s):
             non_null = s.dropna()
-            if len(non_null) == 0:
+            nn_len = len(non_null)
+            if nn_len == 0:
                 continue
+
+            sample = non_null if nn_len <= category_sample_size else non_null.iloc[:category_sample_size]
             try:
-                unique_count = int(non_null.nunique(dropna=True))
+                sample_unique = int(sample.nunique(dropna=True))
             except Exception:
-                unique_count = len(pd.unique(non_null))
-            sample_ratio = min(1.0, len(non_null) / max(len(s), 1))
-            if 0 < unique_count <= min(2000, max(20, int(len(non_null) * 0.35))):
+                sample_unique = len(pd.unique(sample))
+
+            filled_ratio = min(1.0, nn_len / max(len(s), 1))
+            est_unique_ratio = sample_unique / max(len(sample), 1)
+
+            if nn_len <= 50000 and sample_unique <= min(1000, max(20, int(len(sample) * 0.25))) and est_unique_ratio <= 0.5:
                 try:
                     out[col] = s.astype("category")
                     continue
                 except Exception:
                     pass
-            if sample_ratio >= text_threshold:
+
+            if filled_ratio >= text_threshold and nn_len <= 120000:
                 try:
                     out[col] = s.astype("string")
                 except Exception:
@@ -936,6 +943,7 @@ def render_balanced_select_metric_row(select_label, options, select_key, metrics
 
     for col, (label, value) in zip(cols[1:], metrics):
         with col:
+            st.markdown("<div style='height: 1.55rem;'></div>", unsafe_allow_html=True)
             st.metric(label, value)
     return selected_value
 
@@ -1837,7 +1845,8 @@ def load_excel(file_bytes):
         tmp = tmp.sort_values(sc, kind="mergesort")
 
     if not tmp.empty and "단가(원/M2)" in tmp.columns and {"거래처", "품목코드"} <= set(tmp.columns):
-        _t = _positive_price_frame(tmp).groupby(
+        positive_tmp = _positive_price_frame(tmp)
+        _t = positive_tmp.groupby(
             ["거래처", "품목코드"], as_index=False, dropna=False
         ).tail(1)
         _ec = ["거래처", "품목코드", "단가(원/M2)"] + (["날짜"] if "날짜" in _t.columns else [])
@@ -1860,13 +1869,20 @@ def load_excel(file_bytes):
         return ", ".join(vals)
 
     if "가로폭(mm)" in rec.columns and {"거래처", "품목코드"} <= set(rec.columns):
-        wh = (
-            rec.groupby(["거래처", "품목코드"], dropna=False)["가로폭(mm)"]
-            .apply(join_unique)
-            .reset_index()
-            .rename(columns={"가로폭(mm)": "가로폭이력"})
-        )
-        rec = rec.merge(wh, on=["거래처", "품목코드"], how="left")
+        width_src = rec[["거래처", "품목코드", "가로폭(mm)"]].copy()
+        width_src = width_src.dropna(subset=["가로폭(mm)"])
+        if not width_src.empty:
+            width_src["가로폭_text"] = width_src["가로폭(mm)"].map(lambda x: str(int(float(x))) if pd.notna(x) and float(x).is_integer() else str(x))
+            width_src = width_src[["거래처", "품목코드", "가로폭_text"]].drop_duplicates()
+            wh = (
+                width_src.groupby(["거래처", "품목코드"], dropna=False, observed=True)["가로폭_text"]
+                .agg(", ".join)
+                .reset_index()
+                .rename(columns={"가로폭_text": "가로폭이력"})
+            )
+            rec = rec.merge(wh, on=["거래처", "품목코드"], how="left")
+        else:
+            rec["가로폭이력"] = pd.NA
     else:
         rec["가로폭이력"] = pd.NA
 
