@@ -4648,112 +4648,8 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
             else:
                 overview, rep_ref, special_ref, ref_detail = build_quote_reference(q_ref)
 
-                st.markdown("### 1) 품목 기준 견적 레퍼런스")
-                overview_cols = [
-                    "품목코드", "점착제코드", "재단구분", "기준폭이력", "최저단가", "최고단가", "거래처수",
-                    "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
-                ]
-                overview_cols = [c for c in overview_cols if c in overview.columns]
-
-                clean_and_safe_display(
-                    overview[overview_cols] if overview_cols else pd.DataFrame(),
-                    pinned_cols=["품목코드"],
-                    text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력"],
-                    height=None,
-                    column_width_overrides={
-                        "품목코드": 145,
-                        "점착제코드": 75,
-                        "재단구분": 80,
-                        "기준폭이력": 100,
-                        "최저단가": 55,
-                        "최고단가": 55,
-                        "거래처수": 30,
-                        "총출고횟수": 30,
-                        "월평균_출고량": 65,
-                        "월평균_매출": 65,
-                        "총량_M2": 65,
-                        "총매출액": 95,
-                    },
-                )
-
-                st.markdown("### 2) 업체 성향 AI 분석 기반 대표 레퍼런스")
-                st.caption("최근단가의 일자와 단가판단을 함께 보여 최근 단가 인상 전후 여부를 레퍼런스 관점에서 확인할 수 있도록 보강했습니다.")
-                rep_cols = [
-                    "품목코드", "거래처", "업체성향", "AI분석",
-                    "최근날짜", "최근단가", "최근단가경과일", "단가판단",
-                    "최저단가", "최고단가", "월평균_출고량", "월평균_매출", "최근추세", "총매출액"
-                ]
-                rep_cols = [c for c in rep_cols if c in rep_ref.columns]
-
-                clean_and_safe_display(
-                    rep_ref[rep_cols] if rep_cols else pd.DataFrame(),
-                    pinned_cols=["품목코드", "거래처"],
-                    text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세", "단가판단"],
-                    height=None,
-                    column_width_overrides={
-                        "품목코드": 145,
-                        "거래처": 145,
-                        "업체성향": 130,
-                        "AI분석": 360,
-                        "최근날짜": 95,
-                        "최근단가": 80,
-                        "최근단가경과일": 95,
-                        "단가판단": 160,
-                        "최저단가": 80,
-                        "최고단가": 80,
-                        "월평균_출고량": 95,
-                        "월평균_매출": 95,
-                        "최근추세": 85,
-                        "총매출액": 100,
-                    },
-                )
-
-                st.markdown("### 3) 대표 업체 레퍼런스 확장")
-                special_cols = [
-                    "대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근단가",
-                    "최근단가경과일", "단가판단", "최저단가", "최고단가", "월평균_출고량", "월평균_매출",
-                    "최근추세", "총매출액", "AI분석"
-                ]
-                special_cols = [c for c in special_cols if c in special_ref.columns]
-
-                clean_and_safe_display(
-                    special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols),
-                    pinned_cols=["대표구분", "품목코드", "거래처"],
-                    text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근추세", "AI분석", "단가판단"],
-                    height=None,
-                    column_width_overrides={
-                        "대표구분": 150,
-                        "품목코드": 145,
-                        "거래처": 145,
-                        "업체성향": 130,
-                        "최근날짜": 95,
-                        "최근단가": 80,
-                        "최근단가경과일": 95,
-                        "단가판단": 160,
-                        "최저단가": 80,
-                        "최고단가": 80,
-                        "월평균_출고량": 95,
-                        "월평균_매출": 95,
-                        "최근추세": 85,
-                        "총매출액": 100,
-                        "AI분석": 360,
-                    },
-                )
-
-                st.markdown("### 4) 대표 업체 최근단가 비교")
-                draw_quote_reference_chart(special_ref)
-
-                export_df = special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols)
-                rep_csv = export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                st.download_button(
-                    "📥 대표 업체 레퍼런스 CSV 다운로드",
-                    data=rep_csv,
-                    file_name="대표업체_레퍼런스.csv",
-                    mime="text/csv",
-                )
-
                 st.markdown("---")
-                st.markdown("### 5) 신규 거래처 견적용 추천 레퍼런스")
+                st.markdown("### 1) 신규 거래처 견적용 추천 레퍼런스")
                 st.caption("거래처 월평균 매출 규모와 해당 품목의 예상 월매출·월수량을 함께 반영해 유사 레퍼런스를 추천합니다. 기존 탭 계산 로직은 유지하고, 이 섹션만 별도 캐시 분석으로 추가했습니다.")
 
                 if ref_detail.empty:
@@ -5132,6 +5028,112 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                 mime="text/csv",
                                 key="download_new_quote_reference_csv",
                             )
+
+
+
+                st.markdown("### 2) 품목 기준 견적 레퍼런스")
+                overview_cols = [
+                    "품목코드", "점착제코드", "재단구분", "기준폭이력", "최저단가", "최고단가", "거래처수",
+                    "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
+                ]
+                overview_cols = [c for c in overview_cols if c in overview.columns]
+
+                clean_and_safe_display(
+                    overview[overview_cols] if overview_cols else pd.DataFrame(),
+                    pinned_cols=["품목코드"],
+                    text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력"],
+                    height=None,
+                    column_width_overrides={
+                        "품목코드": 145,
+                        "점착제코드": 75,
+                        "재단구분": 80,
+                        "기준폭이력": 100,
+                        "최저단가": 55,
+                        "최고단가": 55,
+                        "거래처수": 30,
+                        "총출고횟수": 30,
+                        "월평균_출고량": 65,
+                        "월평균_매출": 65,
+                        "총량_M2": 65,
+                        "총매출액": 95,
+                    },
+                )
+
+                st.markdown("### 3) 업체 성향 AI 분석 기반 대표 레퍼런스")
+                st.caption("최근단가의 일자와 단가판단을 함께 보여 최근 단가 인상 전후 여부를 레퍼런스 관점에서 확인할 수 있도록 보강했습니다.")
+                rep_cols = [
+                    "품목코드", "거래처", "업체성향", "AI분석",
+                    "최근날짜", "최근단가", "최근단가경과일", "단가판단",
+                    "최저단가", "최고단가", "월평균_출고량", "월평균_매출", "최근추세", "총매출액"
+                ]
+                rep_cols = [c for c in rep_cols if c in rep_ref.columns]
+
+                clean_and_safe_display(
+                    rep_ref[rep_cols] if rep_cols else pd.DataFrame(),
+                    pinned_cols=["품목코드", "거래처"],
+                    text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세", "단가판단"],
+                    height=None,
+                    column_width_overrides={
+                        "품목코드": 145,
+                        "거래처": 145,
+                        "업체성향": 130,
+                        "AI분석": 360,
+                        "최근날짜": 95,
+                        "최근단가": 80,
+                        "최근단가경과일": 95,
+                        "단가판단": 160,
+                        "최저단가": 80,
+                        "최고단가": 80,
+                        "월평균_출고량": 95,
+                        "월평균_매출": 95,
+                        "최근추세": 85,
+                        "총매출액": 100,
+                    },
+                )
+
+                st.markdown("### 4) 대표 업체 레퍼런스 확장")
+                special_cols = [
+                    "대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근단가",
+                    "최근단가경과일", "단가판단", "최저단가", "최고단가", "월평균_출고량", "월평균_매출",
+                    "최근추세", "총매출액", "AI분석"
+                ]
+                special_cols = [c for c in special_cols if c in special_ref.columns]
+
+                clean_and_safe_display(
+                    special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols),
+                    pinned_cols=["대표구분", "품목코드", "거래처"],
+                    text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근추세", "AI분석", "단가판단"],
+                    height=None,
+                    column_width_overrides={
+                        "대표구분": 150,
+                        "품목코드": 145,
+                        "거래처": 145,
+                        "업체성향": 130,
+                        "최근날짜": 95,
+                        "최근단가": 80,
+                        "최근단가경과일": 95,
+                        "단가판단": 160,
+                        "최저단가": 80,
+                        "최고단가": 80,
+                        "월평균_출고량": 95,
+                        "월평균_매출": 95,
+                        "최근추세": 85,
+                        "총매출액": 100,
+                        "AI분석": 360,
+                    },
+                )
+
+                st.markdown("### 5) 대표 업체 최근단가 비교")
+                draw_quote_reference_chart(special_ref)
+
+                export_df = special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols)
+                rep_csv = export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                st.download_button(
+                    "📥 대표 업체 레퍼런스 CSV 다운로드",
+                    data=rep_csv,
+                    file_name="대표업체_레퍼런스.csv",
+                    mime="text/csv",
+                )
 
 
 if active_main_tab == "💰 품목별 수익성":
