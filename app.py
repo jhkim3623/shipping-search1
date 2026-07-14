@@ -2653,7 +2653,8 @@ def build_quote_reference(q_ref):
     if "기준폭" not in df.columns:
         df["기준폭"] = pd.NA
 
-    df["월"] = pd.to_datetime(df["날짜"], errors="coerce").dt.strftime("%Y-%m")
+    df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
+    df["월"] = df["날짜"].dt.strftime("%Y-%m")
     df = df[df["월"].notna() & (df["월"] != "")].copy()
 
     df["품목코드"] = to_text_series(df["품목코드"], strip=True)
@@ -2664,6 +2665,8 @@ def build_quote_reference(q_ref):
     df["재단구분"] = to_text_series(df["재단구분"], strip=True)
     df["기준폭"] = pd.to_numeric(df["기준폭"], errors="coerce")
     df = df.sort_values(["품목코드", "점착제코드", "거래처", "날짜"], kind="mergesort")
+
+    positive_unit_df = _positive_price_frame(df)
 
     overview = (
         df.groupby(["품목코드", "점착제코드", "점착제명"], dropna=False)
@@ -2703,6 +2706,19 @@ def build_quote_reference(q_ref):
     else:
         overview["기준폭이력"] = ""
 
+    if not positive_unit_df.empty:
+        overview_recent = (
+            positive_unit_df
+            .sort_values("날짜", kind="mergesort")
+            .groupby(overview_group_cols, as_index=False)
+            .tail(1)[overview_group_cols + ["날짜"]]
+            .rename(columns={"날짜": "최근날짜"})
+        )
+        overview = overview.merge(overview_recent, on=overview_group_cols, how="left")
+    else:
+        overview["최근날짜"] = pd.NaT
+    overview["최근날짜"] = pd.to_datetime(overview["최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+
     monthly_pc = (
         df.groupby(["품목코드", "거래처", "월"], dropna=False)
         .agg(월출고량=("수량(M2)", "sum"), 월매출=("금액(원)", "sum"))
@@ -2716,10 +2732,9 @@ def build_quote_reference(q_ref):
         .tail(1)[["품목코드", "거래처", "품목명(공식)", "점착제코드", "점착제명"]]
     )
 
-    positive_unit_df = _positive_price_frame(df)
     recent_unit = (
         positive_unit_df
-        .sort_values("날짜")
+        .sort_values("날짜", kind="mergesort")
         .groupby(["품목코드", "거래처"], as_index=False)
         .tail(1)[["품목코드", "거래처", "단가(원/M2)", "날짜"]]
         .rename(columns={"단가(원/M2)": "최근단가", "날짜": "최근날짜"})
@@ -2740,37 +2755,28 @@ def build_quote_reference(q_ref):
     unit_extreme["월평균_출고량"] = np.where(unit_extreme["개월수"] > 0, unit_extreme["총량_M2"] / unit_extreme["개월수"], 0)
     unit_extreme["월평균_매출"] = np.where(unit_extreme["개월수"] > 0, unit_extreme["총매출액"] / unit_extreme["개월수"], 0)
 
-    rows = []
-    for (prod_code, cust_name), g in monthly_pc.groupby(["품목코드", "거래처"]):
-        g = g.sort_values("월").copy()
-        month_count = g["월"].nunique()
-        avg_qty = float(g["월출고량"].mean()) if len(g) > 0 else 0.0
-        avg_sales = float(g["월매출"].mean()) if len(g) > 0 else 0.0
-        total_sales = float(g["월매출"].sum()) if len(g) > 0 else 0.0
-        cv_sales = calc_cv(g["월매출"])
-        slope_sales = calc_slope(g["월매출"].tolist())
-
-        trend = "성장"
-        if slope_sales < 0:
-            trend = "감소"
-        elif abs(slope_sales) < max(1, avg_sales * 0.02):
-            trend = "안정"
-
-        rows.append({
-            "품목코드": str(prod_code),
-            "거래처": str(cust_name),
-            "개월수": int(month_count),
-            "월평균_출고량": avg_qty,
-            "월평균_매출": avg_sales,
-            "총매출액": total_sales,
-            "매출CV": cv_sales,
-            "매출기울기": slope_sales,
-            "최근추세": trend,
-        })
-
-    ref_detail = pd.DataFrame(rows)
+    ref_detail = (
+        monthly_pc.groupby(["품목코드", "거래처"], dropna=False)
+        .agg(
+            개월수=("월", "nunique"),
+            월평균_출고량=("월출고량", "mean"),
+            월평균_매출=("월매출", "mean"),
+            총매출액=("월매출", "sum"),
+            매출CV=("월매출", calc_cv),
+            매출기울기=("월매출", lambda s: calc_slope(s.tolist())),
+        )
+        .reset_index()
+    )
     if ref_detail.empty:
         return overview, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    stable_threshold = np.maximum(1.0, ref_detail["월평균_매출"].to_numpy(dtype=float) * 0.02)
+    slope_values = pd.to_numeric(ref_detail["매출기울기"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    ref_detail["최근추세"] = np.select(
+        [slope_values < 0, np.abs(slope_values) < stable_threshold],
+        ["감소", "안정"],
+        default="성장",
+    )
 
     ref_detail = ref_detail.merge(item_meta, on=["품목코드", "거래처"], how="left")
     ref_detail = ref_detail.merge(recent_unit, on=["품목코드", "거래처"], how="left")
@@ -4859,7 +4865,7 @@ if active_main_tab == "🔎 품목 검색":
                 else:
                     recent_overview, _, _, _ = build_quote_reference(q_recent_search)
                     overview_cols = [
-                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "최저단가", "최고단가", "거래처수",
+                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가", "최고단가", "거래처수",
                         "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                     ]
                     overview_cols = [c for c in overview_cols if c in recent_overview.columns]
@@ -4867,13 +4873,14 @@ if active_main_tab == "🔎 품목 검색":
                     clean_and_safe_display(
                         recent_overview[overview_cols] if overview_cols else pd.DataFrame(),
                         pinned_cols=["품목코드"],
-                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력"],
+                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜"],
                         height=None,
                         column_width_overrides={
                             "품목코드": 165,
                             "점착제코드": 90,
                             "재단구분": 90,
                             "기준폭이력": 120,
+                            "최근날짜": 95,
                             "최저단가": 70,
                             "최고단가": 70,
                             "거래처수": 70,
@@ -5289,7 +5296,7 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
 
                 st.markdown("### 2) 품목 기준 견적 레퍼런스")
                 overview_cols = [
-                    "품목코드", "점착제코드", "재단구분", "기준폭이력", "최저단가", "최고단가", "거래처수",
+                    "품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가", "최고단가", "거래처수",
                     "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                 ]
                 overview_cols = [c for c in overview_cols if c in overview.columns]
@@ -5297,13 +5304,14 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                 clean_and_safe_display(
                     overview[overview_cols] if overview_cols else pd.DataFrame(),
                     pinned_cols=["품목코드"],
-                    text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력"],
+                    text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜"],
                     height=None,
                     column_width_overrides={
                         "품목코드": 145,
                         "점착제코드": 75,
                         "재단구분": 80,
                         "기준폭이력": 100,
+                        "최근날짜": 95,
                         "최저단가": 55,
                         "최고단가": 55,
                         "거래처수": 30,
