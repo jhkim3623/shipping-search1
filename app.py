@@ -931,11 +931,11 @@ def summarize_filter_selection(values, options=None):
     option_count = len([str(v) for v in (options or []) if str(v).strip()])
     if not selected:
         return "선택 없음"
-    if option_count > 0 and len(selected) >= option_count:
-        return f"전체 {option_count}건 선택"
     first_value = selected[0]
     if len(selected) == 1:
         return first_value
+    if option_count > 1 and len(selected) >= option_count:
+        return f"전체 {option_count}건 선택"
     return f"{first_value} 외 {len(selected) - 1}건"
 
 
@@ -3487,42 +3487,63 @@ def draw_quote_reference_chart(special_df):
         st.info("차트로 표시할 대표 업체 데이터가 없습니다.")
         return
 
-    required_cols = {"품목코드", "거래처", "최근단가"}
+    price_col = "레퍼런스단가" if "레퍼런스단가" in special_df.columns else "최근단가"
+    required_cols = {"품목코드", "거래처", price_col}
     if not required_cols.issubset(set(special_df.columns)):
         st.info("차트에 필요한 컬럼이 부족합니다.")
         return
 
     chart_df = special_df.copy()
+    chart_df[price_col] = pd.to_numeric(chart_df[price_col], errors="coerce")
+    chart_df = chart_df[chart_df[price_col].notna()].copy()
+    if chart_df.empty:
+        st.info("차트로 표시할 대표 업체 데이터가 없습니다.")
+        return
+
     items = chart_df["품목코드"].astype(str).unique().tolist()
     color_map = build_color_map(items)
     fig = go.Figure()
+    y_label = "레퍼런스단가" if price_col == "레퍼런스단가" else "최근단가"
 
     for item in items:
         sub = chart_df[chart_df["품목코드"].astype(str) == str(item)].copy()
+        custom_cols = [c for c in ["최근날짜", "단가인상기준일", "적용인상률(%)", "최근단가", "단가판단"] if c in sub.columns]
+        customdata = sub[custom_cols].to_numpy() if custom_cols else None
+        custom_index = {col: i for i, col in enumerate(custom_cols)}
+        hover_lines = [
+            f"품목코드: {item}<br>",
+            "거래처: %{x}<br>",
+            f"{y_label}: %{{y:,.0f}}원/M2<br>",
+        ]
+        if "최근날짜" in custom_index:
+            hover_lines.append(f"최근날짜: %{{customdata[{custom_index['최근날짜']}]}}<br>")
+        if "단가인상기준일" in custom_index:
+            hover_lines.append(f"단가인상기준일: %{{customdata[{custom_index['단가인상기준일']}]}}<br>")
+        if "적용인상률(%)" in custom_index:
+            hover_lines.append(f"적용인상률: %{{customdata[{custom_index['적용인상률(%)']}]}}%<br>")
+        if price_col != "최근단가" and "최근단가" in custom_index:
+            hover_lines.append(f"최근단가: %{{customdata[{custom_index['최근단가']}]}}원/M2<br>")
+        if "단가판단" in custom_index:
+            hover_lines.append(f"단가판단: %{{customdata[{custom_index['단가판단']}]}}<br>")
+        hover_lines.append("구분: %{text}<extra></extra>")
+
         fig.add_trace(go.Scatter(
             x=sub["거래처"],
-            y=sub["최근단가"],
+            y=sub[price_col],
             mode="markers+text",
             name=str(item),
             text=sub["대표구분"] if "대표구분" in sub.columns else "",
             textposition="top center",
             marker=dict(size=11, color=color_map[str(item)], line=dict(width=1, color="white")),
-            hovertemplate=(
-                f"품목코드: {item}<br>"
-                "거래처: %{x}<br>"
-                "최근단가: %{y:,.0f}원/M2<br>"
-                + ("최근날짜: %{customdata[0]}<br>" if "최근날짜" in sub.columns else "")
-                + ("단가판단: %{customdata[1]}<br>" if "단가판단" in sub.columns else "")
-                + "구분: %{text}<extra></extra>"
-            ),
-            customdata=sub[[c for c in ["최근날짜", "단가판단"] if c in sub.columns]].to_numpy() if any(c in sub.columns for c in ["최근날짜", "단가판단"]) else None
+            hovertemplate="".join(hover_lines),
+            customdata=customdata,
         ))
 
     fig.update_layout(
         height=460,
         margin=dict(l=20, r=45, t=30, b=90),
         xaxis=dict(title="", tickangle=-35, automargin=True),
-        yaxis=dict(title="최근단가(원/M2)", tickformat=",.0f", automargin=True),
+        yaxis=dict(title=f"{y_label}(원/M2)", tickformat=",.0f", automargin=True),
         legend=dict(orientation="h", yanchor="top", y=-0.28, x=0, xanchor="left")
     )
     render_plotly_chart(fig, use_container_width=True, key="quote_reference_chart_main")
@@ -4678,19 +4699,21 @@ with sidebar_filter_container:
     )
 
     if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
-        st.markdown("#### 기간")
-        st.date_input(
-            "시작일",
-            min_value=date_min.date(),
-            max_value=date_max.date(),
-            key="flt_widget_start_date"
-        )
-        st.date_input(
-            "종료일",
-            min_value=date_min.date(),
-            max_value=date_max.date(),
-            key="flt_widget_end_date"
-        )
+        date_col1, date_col2 = st.columns(2)
+        with date_col1:
+            st.date_input(
+                "시작일",
+                min_value=date_min.date(),
+                max_value=date_max.date(),
+                key="flt_widget_start_date"
+            )
+        with date_col2:
+            st.date_input(
+                "종료일",
+                min_value=date_min.date(),
+                max_value=date_max.date(),
+                key="flt_widget_end_date"
+            )
 
     apply_col, reset_col = st.columns(2)
     apply_filters_clicked = apply_col.button("필터 적용", use_container_width=True)
@@ -5115,6 +5138,9 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                 st.warning("조건에 맞는 데이터가 없습니다.")
             else:
                 overview, rep_ref, special_ref, ref_detail = build_quote_reference(q_ref)
+                default_rule_date = pd.Timestamp("2026-04-15")
+                selected_quote_product = ""
+                price_rule_df = None
 
                 st.markdown("---")
                 st.markdown("### 1) 신규 거래처 견적용 추천 레퍼런스")
@@ -5499,6 +5525,19 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
 
 
 
+                adjusted_rep_ref = apply_quote_price_adjustments(
+                    rep_ref,
+                    rules_df=price_rule_df,
+                    default_date=default_rule_date,
+                    target_product_code=selected_quote_product,
+                ) if rep_ref is not None and not rep_ref.empty else rep_ref
+                adjusted_special_ref = apply_quote_price_adjustments(
+                    special_ref,
+                    rules_df=price_rule_df,
+                    default_date=default_rule_date,
+                    target_product_code=selected_quote_product,
+                ) if special_ref is not None and not special_ref.empty else special_ref
+
                 st.markdown("### 2) 품목 기준 견적 레퍼런스")
                 overview_cols = [
                     "품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
@@ -5531,18 +5570,18 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                 )
 
                 st.markdown("### 3) 업체 성향 AI 분석 기반 대표 레퍼런스")
-                st.caption("최근단가의 일자와 단가판단을 함께 보여 최근 단가 인상 전후 여부를 레퍼런스 관점에서 확인할 수 있도록 보강했습니다.")
+                st.caption("최근단가와 단가 인상 반영 기준을 함께 보여, 인상 전후 비교를 대표 거래처 관점에서 바로 확인할 수 있도록 정리했습니다.")
                 rep_cols = [
                     "품목코드", "거래처", "업체성향", "AI분석",
-                    "최근날짜", "최근단가", "최근단가경과일", "단가판단",
-                    "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "월평균_출고량", "월평균_매출", "최근추세", "총매출액"
+                    "최근날짜", "단가인상기준일", "적용인상률(%)", "레퍼런스단가", "최근단가", "단가판단",
+                    "최저단가", "최고단가", "월평균_출고량", "월평균_매출", "최근추세", "총매출액"
                 ]
-                rep_cols = [c for c in rep_cols if c in rep_ref.columns]
+                rep_cols = [c for c in rep_cols if c in adjusted_rep_ref.columns]
 
                 clean_and_safe_display(
-                    rep_ref[rep_cols] if rep_cols else pd.DataFrame(),
+                    adjusted_rep_ref[rep_cols] if rep_cols else pd.DataFrame(),
                     pinned_cols=["품목코드", "거래처"],
-                    text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최저단가최근날짜", "최고단가최근날짜", "최근추세", "단가판단"],
+                    text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "단가인상기준일", "최근추세", "단가판단"],
                     height=None,
                     column_width_overrides={
                         "품목코드": 145,
@@ -5550,12 +5589,12 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         "업체성향": 130,
                         "AI분석": 360,
                         "최근날짜": 95,
+                        "단가인상기준일": 105,
+                        "적용인상률(%)": 92,
+                        "레퍼런스단가": 90,
                         "최근단가": 80,
-                        "최근단가경과일": 95,
                         "단가판단": 160,
-                        "최저단가최근날짜": 95,
                         "최저단가": 80,
-                        "최고단가최근날짜": 95,
                         "최고단가": 80,
                         "월평균_출고량": 95,
                         "월평균_매출": 95,
@@ -5566,16 +5605,15 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
 
                 st.markdown("### 4) 대표 업체 레퍼런스 확장")
                 special_cols = [
-                    "대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근단가",
-                    "최근단가경과일", "단가판단", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "월평균_출고량", "월평균_매출",
-                    "최근추세", "총매출액", "AI분석"
+                    "대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "단가인상기준일", "적용인상률(%)", "레퍼런스단가", "최근단가",
+                    "단가판단", "최저단가", "최고단가", "월평균_출고량", "월평균_매출", "최근추세", "총매출액", "AI분석"
                 ]
-                special_cols = [c for c in special_cols if c in special_ref.columns]
+                special_cols = [c for c in special_cols if c in adjusted_special_ref.columns]
 
                 clean_and_safe_display(
-                    special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols),
+                    adjusted_special_ref[special_cols] if (adjusted_special_ref is not None and not adjusted_special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols),
                     pinned_cols=["대표구분", "품목코드", "거래처"],
-                    text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최저단가최근날짜", "최고단가최근날짜", "최근추세", "AI분석", "단가판단"],
+                    text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "단가인상기준일", "최근추세", "AI분석", "단가판단"],
                     height=None,
                     column_width_overrides={
                         "대표구분": 150,
@@ -5583,12 +5621,12 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         "거래처": 145,
                         "업체성향": 130,
                         "최근날짜": 95,
+                        "단가인상기준일": 105,
+                        "적용인상률(%)": 92,
+                        "레퍼런스단가": 90,
                         "최근단가": 80,
-                        "최근단가경과일": 95,
                         "단가판단": 160,
-                        "최저단가최근날짜": 95,
                         "최저단가": 80,
-                        "최고단가최근날짜": 95,
                         "최고단가": 80,
                         "월평균_출고량": 95,
                         "월평균_매출": 95,
@@ -5598,10 +5636,10 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                     },
                 )
 
-                st.markdown("### 5) 대표 업체 최근단가 비교")
-                draw_quote_reference_chart(special_ref)
+                st.markdown("### 5) 대표 업체 레퍼런스단가 비교")
+                draw_quote_reference_chart(adjusted_special_ref)
 
-                export_df = special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols)
+                export_df = adjusted_special_ref[special_cols] if (adjusted_special_ref is not None and not adjusted_special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols)
                 rep_csv = export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                 st.download_button(
                     "📥 대표 업체 레퍼런스 CSV 다운로드",
