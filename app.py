@@ -938,58 +938,48 @@ def summarize_filter_selection(values, options=None):
     return f"{first_value} 외 {len(selected) - 1}건"
 
 
-def close_filter_editor_panels():
-    for widget_key in [
-        "flt_widget_sel_dept",
-        "flt_widget_sel_manager",
-        "flt_widget_sel_cust",
-        "flt_widget_sel_prod",
-        "flt_widget_sel_adh",
-    ]:
-        st.session_state[f"{widget_key}_panel_open"] = False
-
-
-
-def render_filter_multiselect_compact(label, options, key, placeholder="Choose options"):
+def render_filter_multiselect_expander(label, options, key, placeholder="Choose options"):
     current_values = sanitize_multiselect_state(st.session_state.get(key, []), options)
     st.session_state[key] = list(current_values)
+
+    all_key = f"{key}_select_all"
+    prev_all_key = f"{key}_select_all_prev"
+    option_count = len(options)
+    current_all = option_count > 0 and len(current_values) >= option_count
+
+    initialize_filter_state(all_key, current_all)
+    initialize_filter_state(prev_all_key, st.session_state.get(all_key, current_all))
+
+    if st.session_state.get(all_key, False) and option_count > 0 and len(current_values) != option_count:
+        st.session_state[key] = list(options)
+        current_values = list(options)
+    elif (not st.session_state.get(all_key, False)) and st.session_state.get(prev_all_key, False) and current_all:
+        st.session_state[key] = []
+        current_values = []
+
+    st.session_state[prev_all_key] = st.session_state.get(all_key, False)
     summary = summarize_filter_selection(current_values, options)
-    open_key = f"{key}_panel_open"
-    initialize_filter_state(open_key, False)
 
-    header_cols = st.columns([4.0, 1.1, 1.1])
-    header_cols[0].markdown(
-        f"<div style='padding:0.18rem 0 0.18rem 0; font-size:0.78rem; line-height:1.2; color:#4b5563; font-weight:600;'>{html.escape(label)} · {html.escape(summary)}</div>",
-        unsafe_allow_html=True,
-    )
-
-    toggle_label = "닫기" if st.session_state.get(open_key, False) else "열기"
-    if header_cols[1].button(toggle_label, key=f"{key}_toggle_btn", use_container_width=True):
-        st.session_state[open_key] = not st.session_state.get(open_key, False)
-        st.rerun()
-
-    quick_all = len(current_values) < len(options)
-    quick_label = "전체" if quick_all else "해제"
-    if header_cols[2].button(quick_label, key=f"{key}_quick_btn", use_container_width=True):
-        st.session_state[key] = list(options) if quick_all else []
-        st.rerun()
-
-    if st.session_state.get(open_key, False):
+    with st.expander(f"{label} · {summary}", expanded=False):
         st.caption(f"선택 {len(current_values):,}건 / 표시 옵션 {len(options):,}건")
-        st.multiselect(
-            label,
-            options,
-            key=key,
-            placeholder=placeholder,
-            label_visibility="collapsed",
+        st.checkbox(
+            "전체 선택",
+            key=all_key,
+            help="체크하면 모든 옵션을 선택하고 세부 목록은 숨깁니다.",
         )
-        action_cols = st.columns(2)
-        if action_cols[0].button("전체 선택", key=f"{key}_select_all_btn", use_container_width=True):
-            st.session_state[key] = list(options)
-            st.rerun()
-        if action_cols[1].button("전체 해제", key=f"{key}_clear_all_btn", use_container_width=True):
-            st.session_state[key] = []
-            st.rerun()
+
+        if st.session_state.get(all_key, False):
+            if option_count > 0 and len(st.session_state.get(key, [])) != option_count:
+                st.session_state[key] = list(options)
+            st.caption("전체 선택 적용 중입니다. 부분 선택이 필요하면 체크를 해제하세요.")
+        else:
+            st.multiselect(
+                label,
+                options,
+                key=key,
+                placeholder=placeholder,
+                label_visibility="collapsed",
+            )
 
 
 PLOTLY_RENDER_CONFIG = {
@@ -4612,31 +4602,31 @@ st.sidebar.caption(f"점착제코드 후보: {adh_match_count:,}건" + (" (표�
 
 sidebar_filter_container = st.sidebar.container()
 with sidebar_filter_container:
-    render_filter_multiselect_compact(
+    render_filter_multiselect_expander(
         "담당부서",
         dept_options,
         key="flt_widget_sel_dept",
         placeholder="Choose options",
     )
-    render_filter_multiselect_compact(
+    render_filter_multiselect_expander(
         "담당자",
         manager_options,
         key="flt_widget_sel_manager",
         placeholder="Choose options",
     )
-    render_filter_multiselect_compact(
+    render_filter_multiselect_expander(
         "거래처",
         cust_options,
         key="flt_widget_sel_cust",
         placeholder="Choose options",
     )
-    render_filter_multiselect_compact(
+    render_filter_multiselect_expander(
         "품목코드",
         prod_display_options,
         key="flt_widget_sel_prod",
         placeholder="Choose options",
     )
-    render_filter_multiselect_compact(
+    render_filter_multiselect_expander(
         "점착제코드",
         adh_display_options,
         key="flt_widget_sel_adh",
@@ -4677,11 +4667,7 @@ if apply_filters_clicked:
         set_filter_state_pair("flt_start_date", "flt_widget_start_date", sanitize_date_state(st.session_state.get("flt_widget_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None))
     if date_max is not None and pd.notna(date_max):
         set_filter_state_pair("flt_end_date", "flt_widget_end_date", sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date()))
-    close_filter_editor_panels()
     st.session_state["flt_has_applied"] = True
-
-if reset_filters_clicked:
-    close_filter_editor_panels()
 
 sel_dept = sanitize_multiselect_state(st.session_state.get("flt_sel_dept", []), dept_options)
 sel_manager = sanitize_multiselect_state(st.session_state.get("flt_sel_manager", []), manager_options)
