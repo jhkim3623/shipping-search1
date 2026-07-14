@@ -989,6 +989,7 @@ def render_filter_multiselect_expander(label, options, key, placeholder="Choose 
         with action_col2:
             clear_all_clicked = st.form_submit_button(
                 "전체 해제",
+                key=f"{key}_clear_all_submit",
                 use_container_width=True,
             )
 
