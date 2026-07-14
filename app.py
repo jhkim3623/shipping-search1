@@ -925,6 +925,33 @@ def build_option_view(options, query="", selected_values=(), limit=200):
     return ordered, total_matched
 
 
+def summarize_filter_selection(values, options=None):
+    selected = [str(v) for v in (values or []) if str(v).strip()]
+    option_count = len([str(v) for v in (options or []) if str(v).strip()])
+    if not selected:
+        return "선택 없음"
+    if option_count > 0 and len(selected) >= option_count:
+        return f"전체 {option_count}건 선택"
+    first_value = selected[0]
+    if len(selected) == 1:
+        return first_value
+    return f"{first_value} 외 {len(selected) - 1}건"
+
+
+def render_filter_multiselect_expander(label, options, key, placeholder="Choose options"):
+    current_values = sanitize_multiselect_state(st.session_state.get(key, []), options)
+    summary = summarize_filter_selection(current_values, options)
+    with st.expander(f"{label} · {summary}", expanded=False):
+        st.caption(f"선택 {len(current_values):,}건 / 표시 옵션 {len(options):,}건")
+        st.multiselect(
+            label,
+            options,
+            key=key,
+            placeholder=placeholder,
+            label_visibility="collapsed",
+        )
+
+
 PLOTLY_RENDER_CONFIG = {
     "displaylogo": False,
     "responsive": True,
@@ -4544,35 +4571,35 @@ st.sidebar.text_input("점착제코드 옵션 찾기", key="flt_adh_option_query
 st.sidebar.caption(f"점착제코드 후보: {adh_match_count:,}건" + (" (표시 최대 200건)" if adh_match_count > 200 else ""))
 
 with st.sidebar.form("search_filter_form", clear_on_submit=False):
-    st.multiselect(
+    render_filter_multiselect_expander(
         "담당부서",
         dept_options,
         key="flt_widget_sel_dept",
-        placeholder="Choose options"
+        placeholder="Choose options",
     )
-    st.multiselect(
+    render_filter_multiselect_expander(
         "담당자",
         manager_options,
         key="flt_widget_sel_manager",
-        placeholder="Choose options"
+        placeholder="Choose options",
     )
-    st.multiselect(
+    render_filter_multiselect_expander(
         "거래처",
         cust_options,
         key="flt_widget_sel_cust",
-        placeholder="Choose options"
+        placeholder="Choose options",
     )
-    st.multiselect(
+    render_filter_multiselect_expander(
         "품목코드",
         prod_display_options,
         key="flt_widget_sel_prod",
-        placeholder="Choose options"
+        placeholder="Choose options",
     )
-    st.multiselect(
+    render_filter_multiselect_expander(
         "점착제코드",
         adh_display_options,
         key="flt_widget_sel_adh",
-        placeholder="Choose options"
+        placeholder="Choose options",
     )
 
     if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
