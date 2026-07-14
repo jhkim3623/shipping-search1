@@ -873,6 +873,25 @@ def reset_filter_state_defaults(date_min=None, date_max=None, reset_applied=True
     st.session_state["flt_widget_sel_adh"] = []
     st.session_state["flt_prod_option_query"] = ""
     st.session_state["flt_adh_option_query"] = ""
+
+    transient_prefixes = (
+        "flt_widget_sel_dept_option_",
+        "flt_widget_sel_manager_option_",
+        "flt_widget_sel_cust_option_",
+        "flt_widget_sel_prod_option_",
+        "flt_widget_sel_adh_option_",
+    )
+    transient_exact = {
+        "flt_widget_sel_dept_select_all", "flt_widget_sel_dept_select_all_prev",
+        "flt_widget_sel_manager_select_all", "flt_widget_sel_manager_select_all_prev",
+        "flt_widget_sel_cust_select_all", "flt_widget_sel_cust_select_all_prev",
+        "flt_widget_sel_prod_select_all", "flt_widget_sel_prod_select_all_prev",
+        "flt_widget_sel_adh_select_all", "flt_widget_sel_adh_select_all_prev",
+    }
+    for state_key in list(st.session_state.keys()):
+        if state_key in transient_exact or any(state_key.startswith(prefix) for prefix in transient_prefixes):
+            st.session_state.pop(state_key, None)
+
     default_start_date = get_default_filter_start_date(date_min, date_max)
     if default_start_date is not None:
         if reset_applied:
@@ -945,52 +964,63 @@ def render_filter_multiselect_expander(label, options, key, placeholder="Choose 
 
     all_key = f"{key}_select_all"
     prev_all_key = f"{key}_select_all_prev"
+    clear_key = f"{key}_clear_all"
     option_count = len(options)
     current_all = option_count > 0 and len(current_values) >= option_count
 
     initialize_filter_state(all_key, current_all)
     initialize_filter_state(prev_all_key, current_all)
-    if st.session_state.get(all_key) != current_all:
-        st.session_state[all_key] = current_all
-    if st.session_state.get(prev_all_key) != current_all:
-        st.session_state[prev_all_key] = current_all
+    initialize_filter_state(clear_key, False)
 
+    ordered_options = list(current_values) + [opt for opt in options if opt not in set(current_values)]
     summary = summarize_filter_selection(current_values, options)
+    selected_values = list(current_values)
 
     with st.expander(f"{label} · {summary}", expanded=False):
         st.caption(f"선택 {len(current_values):,}건 / 표시 옵션 {len(options):,}건")
-        st.checkbox(
-            "전체 선택",
-            key=all_key,
-            help="체크하면 모든 옵션을 선택하고 세부 목록은 숨깁니다.",
-        )
 
-        if st.session_state.get(all_key, False):
-            if option_count > 0 and len(st.session_state.get(key, [])) != option_count:
-                st.session_state[key] = list(options)
-            st.caption("전체 선택 적용 중입니다. 부분 선택이 필요하면 체크를 해제하세요.")
+        action_col1, action_col2 = st.columns([1.2, 1.0])
+        with action_col1:
+            select_all_checked = st.checkbox(
+                "전체 선택",
+                key=all_key,
+                help="체크하면 현재 표시 옵션 전체를 선택 대상으로 잡습니다.",
+            )
+        with action_col2:
+            clear_all_clicked = st.form_submit_button(
+                "전체 해제",
+                use_container_width=True,
+            )
+
+        if clear_all_clicked:
+            selected_values = []
+            st.session_state[all_key] = False
+            st.session_state[prev_all_key] = False
+            st.caption("선택 항목을 모두 해제했습니다.")
+        elif select_all_checked:
+            selected_values = list(options)
+            st.caption("필터 적용 시 현재 표시 옵션 전체를 선택합니다.")
         else:
-            if not options:
+            if not ordered_options:
+                selected_values = []
                 st.caption("표시할 옵션이 없습니다.")
             else:
-                updated_values = []
-                for idx, option in enumerate(options):
-                    option_text = str(option)
-                    option_state_key = f"{key}_option_{idx}_{zlib.crc32(option_text.encode('utf-8')) & 0xffffffff}"
-                    expected_checked = option_text in current_values
-                    initialize_filter_state(option_state_key, expected_checked)
-                    if st.session_state.get(option_state_key) != expected_checked:
-                        st.session_state[option_state_key] = expected_checked
-                    checked = st.checkbox(option_text, key=option_state_key)
-                    if checked:
-                        updated_values.append(option_text)
+                selected_values = []
+                container_height = 260 if len(ordered_options) > 6 else None
+                option_container = st.container(height=container_height)
+                with option_container:
+                    for option in ordered_options:
+                        option_text = str(option)
+                        option_state_key = f"{key}_option_{zlib.crc32(option_text.encode('utf-8')) & 0xffffffff}"
+                        initialize_filter_state(option_state_key, option_text in current_values)
+                        checked = st.checkbox(option_text, key=option_state_key)
+                        if checked:
+                            selected_values.append(option_text)
 
-                updated_values = sanitize_multiselect_state(updated_values, options)
-                if updated_values != current_values:
-                    st.session_state[key] = list(updated_values)
-                    current_values = list(updated_values)
-
-        st.session_state[prev_all_key] = st.session_state.get(all_key, False)
+    selected_values = sanitize_multiselect_state(selected_values, options)
+    st.session_state[key] = list(selected_values)
+    st.session_state[prev_all_key] = st.session_state.get(all_key, False)
+    return selected_values
 
 
 PLOTLY_RENDER_CONFIG = {
@@ -4675,75 +4705,89 @@ st.sidebar.caption(f"품목코드 후보: {prod_match_count:,}건" + (" (표시 
 st.sidebar.text_input("점착제코드 옵션 찾기", key="flt_adh_option_query", placeholder="예: P700")
 st.sidebar.caption(f"점착제코드 후보: {adh_match_count:,}건" + (" (표시 최대 200건)" if adh_match_count > 200 else ""))
 
+widget_sel_dept_form = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_dept", []), dept_options)
+widget_sel_manager_form = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_manager", []), manager_options)
+widget_sel_cust_form = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_cust", []), cust_options)
+widget_sel_prod_form = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_prod", []), prod_display_options)
+widget_sel_adh_form = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_adh", []), adh_display_options)
+widget_start_date_form = st.session_state.get("flt_widget_start_date", default_start_date if default_start_date is not None else (date_min.date() if date_min is not None and pd.notna(date_min) else None))
+widget_end_date_form = st.session_state.get("flt_widget_end_date", date_max.date() if date_max is not None and pd.notna(date_max) else None)
+
 sidebar_filter_container = st.sidebar.container()
 with sidebar_filter_container:
-    render_filter_multiselect_expander(
-        "담당부서",
-        dept_options,
-        key="flt_widget_sel_dept",
-        placeholder="Choose options",
-    )
-    render_filter_multiselect_expander(
-        "담당자",
-        manager_options,
-        key="flt_widget_sel_manager",
-        placeholder="Choose options",
-    )
-    render_filter_multiselect_expander(
-        "거래처",
-        cust_options,
-        key="flt_widget_sel_cust",
-        placeholder="Choose options",
-    )
-    render_filter_multiselect_expander(
-        "품목코드",
-        prod_display_options,
-        key="flt_widget_sel_prod",
-        placeholder="Choose options",
-    )
-    render_filter_multiselect_expander(
-        "점착제코드",
-        adh_display_options,
-        key="flt_widget_sel_adh",
-        placeholder="Choose options",
-    )
+    with st.form("sidebar_filter_form", clear_on_submit=False):
+        widget_sel_dept_form = render_filter_multiselect_expander(
+            "담당부서",
+            dept_options,
+            key="flt_widget_sel_dept",
+            placeholder="Choose options",
+        )
+        widget_sel_manager_form = render_filter_multiselect_expander(
+            "담당자",
+            manager_options,
+            key="flt_widget_sel_manager",
+            placeholder="Choose options",
+        )
+        widget_sel_cust_form = render_filter_multiselect_expander(
+            "거래처",
+            cust_options,
+            key="flt_widget_sel_cust",
+            placeholder="Choose options",
+        )
+        widget_sel_prod_form = render_filter_multiselect_expander(
+            "품목코드",
+            prod_display_options,
+            key="flt_widget_sel_prod",
+            placeholder="Choose options",
+        )
+        widget_sel_adh_form = render_filter_multiselect_expander(
+            "점착제코드",
+            adh_display_options,
+            key="flt_widget_sel_adh",
+            placeholder="Choose options",
+        )
 
-    if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
-        date_col1, date_col2 = st.columns(2)
-        with date_col1:
-            st.date_input(
-                "시작일",
-                min_value=date_min.date(),
-                max_value=date_max.date(),
-                key="flt_widget_start_date"
-            )
-        with date_col2:
-            st.date_input(
-                "종료일",
-                min_value=date_min.date(),
-                max_value=date_max.date(),
-                key="flt_widget_end_date"
-            )
+        if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
+            date_col1, date_col2 = st.columns(2)
+            with date_col1:
+                widget_start_date_form = st.date_input(
+                    "시작일",
+                    min_value=date_min.date(),
+                    max_value=date_max.date(),
+                    key="flt_widget_start_date"
+                )
+            with date_col2:
+                widget_end_date_form = st.date_input(
+                    "종료일",
+                    min_value=date_min.date(),
+                    max_value=date_max.date(),
+                    key="flt_widget_end_date"
+                )
 
-    apply_col, reset_col = st.columns(2)
-    apply_filters_clicked = apply_col.button("필터 적용", use_container_width=True)
-    reset_filters_clicked = reset_col.button(
-        "초기화",
-        use_container_width=True,
-        on_click=reset_filter_state_defaults,
-        kwargs={"date_min": date_min, "date_max": date_max, "reset_applied": False},
-    )
+        apply_col, reset_col = st.columns(2)
+        apply_filters_clicked = apply_col.form_submit_button("필터 적용", use_container_width=True)
+        reset_filters_clicked = reset_col.form_submit_button("초기화", use_container_width=True)
+
+if reset_filters_clicked:
+    reset_filter_state_defaults(date_min=date_min, date_max=date_max, reset_applied=False)
+    widget_sel_dept_form = []
+    widget_sel_manager_form = []
+    widget_sel_cust_form = []
+    widget_sel_prod_form = []
+    widget_sel_adh_form = []
+    widget_start_date_form = default_start_date if default_start_date is not None else (date_min.date() if date_min is not None and pd.notna(date_min) else None)
+    widget_end_date_form = date_max.date() if date_max is not None and pd.notna(date_max) else None
 
 if apply_filters_clicked:
-    set_filter_state_pair("flt_sel_dept", "flt_widget_sel_dept", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_dept", []), dept_options))
-    set_filter_state_pair("flt_sel_manager", "flt_widget_sel_manager", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_manager", []), manager_options))
-    set_filter_state_pair("flt_sel_cust", "flt_widget_sel_cust", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_cust", []), cust_options))
-    set_filter_state_pair("flt_sel_prod", "flt_widget_sel_prod", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_prod", []), prod_options))
-    set_filter_state_pair("flt_sel_adh", "flt_widget_sel_adh", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_adh", []), adh_options))
+    set_filter_state_pair("flt_sel_dept", "flt_widget_sel_dept", sanitize_multiselect_state(widget_sel_dept_form, dept_options))
+    set_filter_state_pair("flt_sel_manager", "flt_widget_sel_manager", sanitize_multiselect_state(widget_sel_manager_form, manager_options))
+    set_filter_state_pair("flt_sel_cust", "flt_widget_sel_cust", sanitize_multiselect_state(widget_sel_cust_form, cust_options))
+    set_filter_state_pair("flt_sel_prod", "flt_widget_sel_prod", sanitize_multiselect_state(widget_sel_prod_form, prod_options))
+    set_filter_state_pair("flt_sel_adh", "flt_widget_sel_adh", sanitize_multiselect_state(widget_sel_adh_form, adh_options))
     if date_min is not None and pd.notna(date_min):
-        set_filter_state_pair("flt_start_date", "flt_widget_start_date", sanitize_date_state(st.session_state.get("flt_widget_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None))
+        set_filter_state_pair("flt_start_date", "flt_widget_start_date", sanitize_date_state(widget_start_date_form, date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None))
     if date_max is not None and pd.notna(date_max):
-        set_filter_state_pair("flt_end_date", "flt_widget_end_date", sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date()))
+        set_filter_state_pair("flt_end_date", "flt_widget_end_date", sanitize_date_state(widget_end_date_form, date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date()))
     st.session_state["flt_has_applied"] = True
 
 sel_dept = sanitize_multiselect_state(st.session_state.get("flt_sel_dept", []), dept_options)
