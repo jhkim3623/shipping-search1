@@ -186,10 +186,12 @@ section[data-testid="stSidebar"] div[data-baseweb="select"] input::placeholder {
     opacity: 1 !important;
 }
 section[data-testid="stSidebar"] div[data-baseweb="select"] div[class*="valueContainer"] {
-    max-height: 118px !important;
+    max-height: 92px !important;
     overflow-y: auto !important;
     flex-wrap: wrap !important;
     align-content: flex-start !important;
+    padding-top: 0.35rem !important;
+    padding-bottom: 0.35rem !important;
 }
 section[data-testid="stSidebar"] div[data-baseweb="tag"] {
     max-width: 100% !important;
@@ -963,14 +965,12 @@ def render_filter_multiselect_expander(label, options, key, placeholder="Choose 
     st.session_state[key] = list(current_values)
 
     all_key = f"{key}_select_all"
-    prev_all_key = f"{key}_select_all_prev"
-    clear_key = f"{key}_clear_all"
+    widget_key = f"{key}_multiselect"
     option_count = len(options)
     current_all = option_count > 0 and len(current_values) >= option_count
 
     initialize_filter_state(all_key, current_all)
-    initialize_filter_state(prev_all_key, current_all)
-    initialize_filter_state(clear_key, False)
+    initialize_filter_state(widget_key, list(current_values))
 
     ordered_options = list(current_values) + [opt for opt in options if opt not in set(current_values)]
     summary = summarize_filter_selection(current_values, options)
@@ -996,33 +996,37 @@ def render_filter_multiselect_expander(label, options, key, placeholder="Choose 
         if clear_all_clicked:
             selected_values = []
             st.session_state[all_key] = False
-            st.session_state[prev_all_key] = False
+            st.session_state[widget_key] = []
             st.caption("선택 항목을 모두 해제했습니다.")
         elif select_all_checked:
             selected_values = list(options)
+            st.session_state[widget_key] = list(options)
             st.caption("필터 적용 시 현재 표시 옵션 전체를 선택합니다.")
         else:
             if not ordered_options:
                 selected_values = []
+                st.session_state[widget_key] = []
                 st.caption("표시할 옵션이 없습니다.")
             else:
-                selected_values = []
-                if len(ordered_options) > 6:
-                    option_container = st.container(height=260)
-                else:
-                    option_container = st.container()
-                with option_container:
-                    for option in ordered_options:
-                        option_text = str(option)
-                        option_state_key = f"{key}_option_{zlib.crc32(option_text.encode('utf-8')) & 0xffffffff}"
-                        initialize_filter_state(option_state_key, option_text in current_values)
-                        checked = st.checkbox(option_text, key=option_state_key)
-                        if checked:
-                            selected_values.append(option_text)
+                preserved_values = sanitize_multiselect_state(
+                    st.session_state.get(widget_key, current_values),
+                    ordered_options,
+                )
+                if preserved_values != st.session_state.get(widget_key, []):
+                    st.session_state[widget_key] = list(preserved_values)
+                selected_values = st.multiselect(
+                    label,
+                    options=ordered_options,
+                    key=widget_key,
+                    placeholder=placeholder,
+                    label_visibility="collapsed",
+                    help="검색 또는 스크롤로 원하는 항목을 선택하세요.",
+                )
+                selected_values = sanitize_multiselect_state(selected_values, ordered_options)
+                st.session_state[all_key] = option_count > 0 and len(selected_values) >= option_count
 
     selected_values = sanitize_multiselect_state(selected_values, options)
     st.session_state[key] = list(selected_values)
-    st.session_state[prev_all_key] = st.session_state.get(all_key, False)
     return selected_values
 
 
