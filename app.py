@@ -885,19 +885,20 @@ def reset_filter_state_defaults(date_min=None, date_max=None, reset_applied=True
 
 
 def build_filter_pair_frame(df):
-    base = pd.DataFrame(columns=["품목코드", "점착제코드"])
+    base = pd.DataFrame(columns=["거래처", "품목코드", "점착제코드"])
     if df is None or df.empty:
         return base
-    pair_cols = [c for c in ["품목코드", "점착제코드"] if c in df.columns]
+
+    pair_cols = [c for c in ["거래처", "품목코드", "점착제코드"] if c in df.columns]
     if not pair_cols:
         return base
+
     pair_df = df[pair_cols].copy()
-    if "품목코드" not in pair_df.columns:
-        pair_df["품목코드"] = ""
-    if "점착제코드" not in pair_df.columns:
-        pair_df["점착제코드"] = ""
-    pair_df["품목코드"] = to_text_series(pair_df["품목코드"], strip=True)
-    pair_df["점착제코드"] = to_text_series(pair_df["점착제코드"], strip=True)
+    for col in ["거래처", "품목코드", "점착제코드"]:
+        if col not in pair_df.columns:
+            pair_df[col] = ""
+        pair_df[col] = to_text_series(pair_df[col], strip=True)
+
     pair_df = pair_df.drop_duplicates(ignore_index=True)
     return pair_df
 
@@ -1041,31 +1042,41 @@ def build_sidebar_filter_metadata(df, dept_col=None, manager_col=None):
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def build_cross_filtered_option_sets(df, prod_query="", adh_query=""):
+def build_cross_filtered_option_sets(df, prod_query="", adh_query="", selected_customers=(), all_customer_options=()):
     if df is None or df.empty:
         return [], []
 
     work = df.copy()
-    if "품목코드" not in work.columns:
-        work["품목코드"] = ""
-    if "점착제코드" not in work.columns:
-        work["점착제코드"] = ""
-
-    work["품목코드"] = to_text_series(work["품목코드"], strip=True)
-    work["점착제코드"] = to_text_series(work["점착제코드"], strip=True)
+    for col in ["거래처", "품목코드", "점착제코드"]:
+        if col not in work.columns:
+            work[col] = ""
+        work[col] = to_text_series(work[col], strip=True)
 
     prod_q = str(prod_query or "").strip().lower()
     adh_q = str(adh_query or "").strip().lower()
+    selected_customers = [str(v).strip() for v in (selected_customers or ()) if str(v).strip()]
+    all_customer_options = [str(v).strip() for v in (all_customer_options or ()) if str(v).strip()]
 
-    mask = pd.Series(True, index=work.index)
+    customer_mask = pd.Series(True, index=work.index)
+    if selected_customers and (not all_customer_options or len(selected_customers) < len(all_customer_options)):
+        customer_mask &= work["거래처"].isin(selected_customers)
+
+    prod_mask = customer_mask.copy()
     if prod_q:
-        mask &= work["품목코드"].str.lower().str.contains(prod_q, na=False)
+        prod_mask &= work["품목코드"].str.lower().str.contains(prod_q, na=False)
     if adh_q:
-        mask &= work["점착제코드"].str.lower().str.contains(adh_q, na=False)
+        prod_mask &= work["점착제코드"].str.lower().str.contains(adh_q, na=False)
 
-    filtered = work.loc[mask]
-    prod_candidates = sorted_unique(filtered["품목코드"]) if "품목코드" in filtered.columns else []
-    adh_candidates = sorted_unique(filtered["점착제코드"]) if "점착제코드" in filtered.columns else []
+    adh_mask = pd.Series(True, index=work.index)
+    if prod_q:
+        adh_mask &= work["품목코드"].str.lower().str.contains(prod_q, na=False)
+    if adh_q:
+        adh_mask &= work["점착제코드"].str.lower().str.contains(adh_q, na=False)
+
+    prod_filtered = work.loc[prod_mask]
+    adh_filtered = work.loc[adh_mask]
+    prod_candidates = sorted_unique(prod_filtered["품목코드"]) if "품목코드" in prod_filtered.columns else []
+    adh_candidates = sorted_unique(adh_filtered["점착제코드"]) if "점착제코드" in adh_filtered.columns else []
     return prod_candidates, adh_candidates
 
 
@@ -4528,7 +4539,7 @@ dept_options, manager_options, cust_options, prod_options, adh_options, date_min
     ([], [], [], [], [], None, None),
 )
 default_start_date = get_default_filter_start_date(date_min, date_max)
-filter_pair_df = st.session_state.get("_filter_pair_cache_value", pd.DataFrame(columns=["품목코드", "점착제코드"]))
+filter_pair_df = st.session_state.get("_filter_pair_cache_value", pd.DataFrame(columns=["거래처", "품목코드", "점착제코드"]))
 
 if st.session_state.get("_filter_loaded_signature") != filter_source_signature:
     reset_filter_state_defaults(date_min=date_min, date_max=date_max, reset_applied=True)
@@ -4579,6 +4590,8 @@ cross_prod_options, cross_adh_options = build_cross_filtered_option_sets(
     filter_pair_df,
     prod_query=st.session_state.get("flt_prod_option_query", ""),
     adh_query=st.session_state.get("flt_adh_option_query", ""),
+    selected_customers=tuple(st.session_state.get("flt_widget_sel_cust", [])),
+    all_customer_options=tuple(cust_options),
 )
 
 prod_display_options, prod_match_count = build_option_view(
@@ -5023,9 +5036,16 @@ if active_main_tab == "🔎 품목 검색":
                             "최고단가최근날짜": "일자(高)",
                         })
 
-                    render_compact_html_table(
+                    if not product_search_view.empty:
+                        sort_cols = [c for c in ["품목코드", "점착제코드", "일자(低)", "일자(高)"] if c in product_search_view.columns]
+                        if sort_cols:
+                            product_search_view = product_search_view.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
+
+                    clean_and_safe_display(
                         product_search_view,
                         height=calc_table_height(product_search_view, min_rows=1, max_rows=12),
+                        pinned_cols=["품목코드"],
+                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "일자(低)", "일자(高)"],
                         column_width_overrides={
                             "품목코드": 165,
                             "점착제코드": 90,
@@ -5042,7 +5062,6 @@ if active_main_tab == "🔎 품목 검색":
                             "총량_M2": 85,
                             "총매출액": 110,
                         },
-                        center_cols=["일자(低)", "일자(高)", "점착제코드", "재단구분"],
                     )
 
 if active_main_tab == "🏷️ 견적 레퍼런스":
