@@ -952,7 +952,7 @@ def summarize_filter_selection(values, options=None):
         return "선택 없음"
     first_value = selected[0]
     if len(selected) == 1:
-        return first_value
+        return f"{first_value} · 1건"
     if option_count > 1 and len(selected) >= option_count:
         return f"전체 {option_count}건 선택"
     return f"{first_value} 외 {len(selected) - 1}건"
@@ -987,7 +987,7 @@ def render_filter_multiselect_expander(label, options, key, placeholder="Choose 
                 help="체크하면 현재 표시 옵션 전체를 선택 대상으로 잡습니다.",
             )
         with action_col2:
-            clear_all_clicked = st.form_submit_button(
+            clear_all_clicked = st.button(
                 "전체 해제",
                 key=f"{key}_clear_all_submit",
                 use_container_width=True,
@@ -4718,58 +4718,57 @@ widget_end_date_form = st.session_state.get("flt_widget_end_date", date_max.date
 
 sidebar_filter_container = st.sidebar.container()
 with sidebar_filter_container:
-    with st.form("sidebar_filter_form", clear_on_submit=False):
-        widget_sel_dept_form = render_filter_multiselect_expander(
-            "담당부서",
-            dept_options,
-            key="flt_widget_sel_dept",
-            placeholder="Choose options",
-        )
-        widget_sel_manager_form = render_filter_multiselect_expander(
-            "담당자",
-            manager_options,
-            key="flt_widget_sel_manager",
-            placeholder="Choose options",
-        )
-        widget_sel_cust_form = render_filter_multiselect_expander(
-            "거래처",
-            cust_options,
-            key="flt_widget_sel_cust",
-            placeholder="Choose options",
-        )
-        widget_sel_prod_form = render_filter_multiselect_expander(
-            "품목코드",
-            prod_display_options,
-            key="flt_widget_sel_prod",
-            placeholder="Choose options",
-        )
-        widget_sel_adh_form = render_filter_multiselect_expander(
-            "점착제코드",
-            adh_display_options,
-            key="flt_widget_sel_adh",
-            placeholder="Choose options",
-        )
+    widget_sel_dept_form = render_filter_multiselect_expander(
+        "담당부서",
+        dept_options,
+        key="flt_widget_sel_dept",
+        placeholder="Choose options",
+    )
+    widget_sel_manager_form = render_filter_multiselect_expander(
+        "담당자",
+        manager_options,
+        key="flt_widget_sel_manager",
+        placeholder="Choose options",
+    )
+    widget_sel_cust_form = render_filter_multiselect_expander(
+        "거래처",
+        cust_options,
+        key="flt_widget_sel_cust",
+        placeholder="Choose options",
+    )
+    widget_sel_prod_form = render_filter_multiselect_expander(
+        "품목코드",
+        prod_display_options,
+        key="flt_widget_sel_prod",
+        placeholder="Choose options",
+    )
+    widget_sel_adh_form = render_filter_multiselect_expander(
+        "점착제코드",
+        adh_display_options,
+        key="flt_widget_sel_adh",
+        placeholder="Choose options",
+    )
 
-        if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
-            date_col1, date_col2 = st.columns(2)
-            with date_col1:
-                widget_start_date_form = st.date_input(
-                    "시작일",
-                    min_value=date_min.date(),
-                    max_value=date_max.date(),
-                    key="flt_widget_start_date"
-                )
-            with date_col2:
-                widget_end_date_form = st.date_input(
-                    "종료일",
-                    min_value=date_min.date(),
-                    max_value=date_max.date(),
-                    key="flt_widget_end_date"
-                )
+    if date_min is not None and pd.notna(date_min) and date_max is not None and pd.notna(date_max):
+        date_col1, date_col2 = st.columns(2)
+        with date_col1:
+            widget_start_date_form = st.date_input(
+                "시작일",
+                min_value=date_min.date(),
+                max_value=date_max.date(),
+                key="flt_widget_start_date"
+            )
+        with date_col2:
+            widget_end_date_form = st.date_input(
+                "종료일",
+                min_value=date_min.date(),
+                max_value=date_max.date(),
+                key="flt_widget_end_date"
+            )
 
-        apply_col, reset_col = st.columns(2)
-        apply_filters_clicked = apply_col.form_submit_button("필터 적용", use_container_width=True)
-        reset_filters_clicked = reset_col.form_submit_button("초기화", use_container_width=True)
+    apply_col, reset_col = st.columns(2)
+    apply_filters_clicked = apply_col.button("필터 적용", key="sidebar_apply_filters", use_container_width=True)
+    reset_filters_clicked = reset_col.button("초기화", key="sidebar_reset_filters", use_container_width=True)
 
 if reset_filters_clicked:
     reset_filter_state_defaults(date_min=date_min, date_max=date_max, reset_applied=False)
