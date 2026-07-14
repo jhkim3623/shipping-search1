@@ -858,12 +858,14 @@ def get_default_filter_start_date(date_min=None, date_max=None):
     return default_start
 
 
-def reset_filter_state_defaults(date_min=None, date_max=None):
-    st.session_state["flt_sel_dept"] = []
-    st.session_state["flt_sel_manager"] = []
-    st.session_state["flt_sel_cust"] = []
-    st.session_state["flt_sel_prod"] = []
-    st.session_state["flt_sel_adh"] = []
+def reset_filter_state_defaults(date_min=None, date_max=None, reset_applied=True):
+    if reset_applied:
+        st.session_state["flt_sel_dept"] = []
+        st.session_state["flt_sel_manager"] = []
+        st.session_state["flt_sel_cust"] = []
+        st.session_state["flt_sel_prod"] = []
+        st.session_state["flt_sel_adh"] = []
+        st.session_state["flt_has_applied"] = False
     st.session_state["flt_widget_sel_dept"] = []
     st.session_state["flt_widget_sel_manager"] = []
     st.session_state["flt_widget_sel_cust"] = []
@@ -873,10 +875,12 @@ def reset_filter_state_defaults(date_min=None, date_max=None):
     st.session_state["flt_adh_option_query"] = ""
     default_start_date = get_default_filter_start_date(date_min, date_max)
     if default_start_date is not None:
-        st.session_state["flt_start_date"] = default_start_date
+        if reset_applied:
+            st.session_state["flt_start_date"] = default_start_date
         st.session_state["flt_widget_start_date"] = default_start_date
     if date_max is not None and pd.notna(date_max):
-        st.session_state["flt_end_date"] = date_max.date()
+        if reset_applied:
+            st.session_state["flt_end_date"] = date_max.date()
         st.session_state["flt_widget_end_date"] = date_max.date()
 
 
@@ -4469,6 +4473,11 @@ dept_options, manager_options, cust_options, prod_options, adh_options, date_min
 default_start_date = get_default_filter_start_date(date_min, date_max)
 filter_pair_df = st.session_state.get("_filter_pair_cache_value", pd.DataFrame(columns=["품목코드", "점착제코드"]))
 
+if st.session_state.get("_filter_loaded_signature") != filter_source_signature:
+    reset_filter_state_defaults(date_min=date_min, date_max=date_max, reset_applied=True)
+    st.session_state["_filter_loaded_signature"] = filter_source_signature
+
+initialize_filter_state("flt_has_applied", False)
 initialize_filter_state("flt_sel_dept", [])
 initialize_filter_state("flt_sel_manager", [])
 initialize_filter_state("flt_sel_cust", [])
@@ -4587,7 +4596,7 @@ with st.sidebar.form("search_filter_form", clear_on_submit=False):
         "초기화",
         use_container_width=True,
         on_click=reset_filter_state_defaults,
-        kwargs={"date_min": date_min, "date_max": date_max},
+        kwargs={"date_min": date_min, "date_max": date_max, "reset_applied": False},
     )
 
 if apply_filters_clicked:
@@ -4600,6 +4609,7 @@ if apply_filters_clicked:
         set_filter_state_pair("flt_start_date", "flt_widget_start_date", sanitize_date_state(st.session_state.get("flt_widget_start_date", date_min.date()), date_min.date(), date_max.date() if date_max is not None and pd.notna(date_max) else None))
     if date_max is not None and pd.notna(date_max):
         set_filter_state_pair("flt_end_date", "flt_widget_end_date", sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date()))
+    st.session_state["flt_has_applied"] = True
 
 sel_dept = sanitize_multiselect_state(st.session_state.get("flt_sel_dept", []), dept_options)
 sel_manager = sanitize_multiselect_state(st.session_state.get("flt_sel_manager", []), manager_options)
@@ -4693,31 +4703,40 @@ st.pills(
 active_main_tab = st.session_state.get("active_main_tab", current_active_tab)
 lazy_active_tab = st.session_state.get("lazy_active_tab", active_main_tab)
 
-q_quote_scope = apply_filters(
-    rec,
-    dept_col=dept_col,
-    manager_col=manager_col,
-    sel_dept=sel_dept,
-    sel_manager=sel_manager,
-    sel_cust=sel_cust,
-    start_ts=start_ts,
-    end_ts=end_ts,
-)
+filters_ready = bool(st.session_state.get("flt_has_applied", False))
+filter_wait_message = "검색 필터를 설정한 뒤 '필터 적용'을 눌러 주세요. 초기화 후에는 이전 결과를 유지하고, 다시 적용할 때만 새 결과를 계산합니다."
 
-q = apply_filters(
-    q_quote_scope,
-    sel_prod=sel_prod,
-    sel_adh=sel_adh,
-)
+if filters_ready:
+    q_quote_scope = apply_filters(
+        rec,
+        dept_col=dept_col,
+        manager_col=manager_col,
+        sel_dept=sel_dept,
+        sel_manager=sel_manager,
+        sel_cust=sel_cust,
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
 
-st.sidebar.caption(f"현재 필터 결과: {len(q):,}건")
+    q = apply_filters(
+        q_quote_scope,
+        sel_prod=sel_prod,
+        sel_adh=sel_adh,
+    )
+    st.sidebar.caption(f"현재 필터 결과: {len(q):,}건")
+else:
+    q_quote_scope = rec.iloc[0:0].copy()
+    q = rec.iloc[0:0].copy()
+    st.sidebar.caption("현재 필터 결과: 적용 전")
 
 if active_main_tab == "👥 거래처별 검색":
     if lazy_tabs_enabled and lazy_active_tab != "👥 거래처별 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
             st.subheader("거래처별 → 품목별 출고 이력/최근 단가/가로폭")
-            if q.empty:
+            if not filters_ready:
+                st.info(filter_wait_message)
+            elif q.empty:
                 st.warning("조건에 맞는 데이터가 없습니다.")
             else:
                 q1 = q.copy()
@@ -4800,7 +4819,9 @@ if active_main_tab == "📦 품목별 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
             st.subheader("품목별 → 거래처별 출고 이력/총량/단가/매출")
-            if q.empty:
+            if not filters_ready:
+                st.info(filter_wait_message)
+            elif q.empty:
                 st.warning("조건에 맞는 데이터가 없습니다.")
             else:
                 q2 = q.copy()
@@ -4863,7 +4884,7 @@ if active_main_tab == "🔎 품목 검색":
     else:
             st.subheader("🔎 품목 검색 — 최근 6개월 데이터 기준")
 
-            q_recent = rec.copy()
+            q_recent = q_quote_scope.copy()
             if dept_col and sel_dept:
                 q_recent = q_recent[q_recent[dept_col].astype(str).str.strip().isin(sel_dept)]
             if manager_col and sel_manager:
@@ -4899,7 +4920,9 @@ if active_main_tab == "🔎 품목 검색":
             liner_spec_kw = filter_cols[3].text_input("이형지(평량/두께)", key="product_search_liner_spec", placeholder="예: 100")
             adhesive_kw = filter_cols[4].text_input("점착제", key="product_search_adhesive", placeholder="예: 270")
 
-            if q_recent.empty:
+            if not filters_ready:
+                st.info(filter_wait_message)
+            elif q_recent.empty:
                 st.warning("최근 6개월 조건에 맞는 데이터가 없습니다.")
             else:
                 bom_lookup = build_product_bom_lookup(tuple(sorted(q_recent["품목코드"].dropna().astype(str).unique().tolist())))
@@ -4931,25 +4954,28 @@ if active_main_tab == "🔎 품목 검색":
                 else:
                     recent_overview, _, _, _ = build_quote_reference(q_recent_search)
                     overview_cols = [
-                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
+                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
                         "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                     ]
                     overview_cols = [c for c in overview_cols if c in recent_overview.columns]
+                    product_search_view = recent_overview[overview_cols].copy() if overview_cols else pd.DataFrame()
+                    if not product_search_view.empty:
+                        product_search_view = product_search_view.rename(columns={
+                            "최저단가최근날짜": "일자(低)",
+                            "최고단가최근날짜": "일자(高)",
+                        })
 
-                    clean_and_safe_display(
-                        recent_overview[overview_cols] if overview_cols else pd.DataFrame(),
-                        pinned_cols=["품목코드"],
-                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가최근날짜", "최고단가최근날짜"],
-                        height=None,
+                    render_compact_html_table(
+                        product_search_view,
+                        height=calc_table_height(product_search_view, min_rows=1, max_rows=12),
                         column_width_overrides={
                             "품목코드": 165,
                             "점착제코드": 90,
                             "재단구분": 90,
                             "기준폭이력": 120,
-                            "최근날짜": 95,
-                            "최저단가최근날짜": 95,
+                            "일자(低)": 95,
                             "최저단가": 70,
-                            "최고단가최근날짜": 95,
+                            "일자(高)": 95,
                             "최고단가": 70,
                             "거래처수": 70,
                             "총출고횟수": 85,
@@ -4958,6 +4984,7 @@ if active_main_tab == "🔎 품목 검색":
                             "총량_M2": 85,
                             "총매출액": 110,
                         },
+                        center_cols=["일자(低)", "일자(高)", "점착제코드", "재단구분"],
                     )
 
 if active_main_tab == "🏷️ 견적 레퍼런스":
@@ -4974,7 +5001,9 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                 if col in q_ref.columns:
                     q_ref = q_ref[~q_ref[col].astype(str).str.contains("샘플", case=False, na=False)]
 
-            if q_ref.empty:
+            if not filters_ready:
+                st.info(filter_wait_message)
+            elif q_ref.empty:
                 st.warning("조건에 맞는 데이터가 없습니다.")
             else:
                 overview, rep_ref, special_ref, ref_detail = build_quote_reference(q_ref)
@@ -6977,7 +7006,9 @@ if active_main_tab == "📊 거래처별 매출 분석":
             st.subheader("📊 거래처별 매출 분석")
             st.caption("기존 매출하락/품목감소 분석에는 영향 없이 별도 탭으로 분리된 거래처 분석입니다.")
 
-            if q.empty:
+            if not filters_ready:
+                st.info(filter_wait_message)
+            elif q.empty:
                 st.warning("조건에 맞는 데이터가 없습니다.")
             else:
                 pack = build_customer_sales_analysis(q, selected_end_month=selected_end_month)
@@ -7295,7 +7326,9 @@ if active_main_tab == "📊 거래처통합분석":
             st.subheader("📊 거래처통합분석")
             st.caption("TAB5와 동일한 형식의 별도 통합 분석 탭입니다. 여러 거래처 선택 시 선택된 거래처의 합산 데이터를 상세분석으로 표시합니다.")
 
-            if q.empty:
+            if not filters_ready:
+                st.info(filter_wait_message)
+            elif q.empty:
                 st.warning("조건에 맞는 데이터가 없습니다.")
             else:
                 integrated_pack = build_customer_integrated_analysis(q, tuple(sel_cust), selected_end_month=selected_end_month)
@@ -8511,6 +8544,9 @@ if active_main_tab == "🗂️ 원자료":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
             st.subheader("원자료(필터 적용됨)")
+            if not filters_ready:
+                st.info(filter_wait_message)
+                st.stop()
             raw_priority_cols = [
                 "날짜", "거래처", "담당부서", "영업담당부서", "담당자", "재단구분",
                 "품목코드", "점착제코드", "점착제명", "기준폭", "가로폭(mm)", "길이(m)", "가로폭이력",
