@@ -1006,8 +1006,10 @@ def render_filter_multiselect_expander(label, options, key, placeholder="Choose 
                 st.caption("표시할 옵션이 없습니다.")
             else:
                 selected_values = []
-                container_height = 260 if len(ordered_options) > 6 else None
-                option_container = st.container(height=container_height)
+                if len(ordered_options) > 6:
+                    option_container = st.container(height=260)
+                else:
+                    option_container = st.container()
                 with option_container:
                     for option in ordered_options:
                         option_text = str(option)
