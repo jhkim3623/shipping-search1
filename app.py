@@ -1,5 +1,6 @@
 import html
 import os
+import zlib
 from io import BytesIO
 
 import numpy as np
@@ -877,6 +878,24 @@ def reset_filter_state_defaults(date_min=None, date_max=None):
     if date_max is not None and pd.notna(date_max):
         st.session_state["flt_end_date"] = date_max.date()
         st.session_state["flt_widget_end_date"] = date_max.date()
+
+
+def build_filter_pair_frame(df):
+    base = pd.DataFrame(columns=["품목코드", "점착제코드"])
+    if df is None or df.empty:
+        return base
+    pair_cols = [c for c in ["품목코드", "점착제코드"] if c in df.columns]
+    if not pair_cols:
+        return base
+    pair_df = df[pair_cols].copy()
+    if "품목코드" not in pair_df.columns:
+        pair_df["품목코드"] = ""
+    if "점착제코드" not in pair_df.columns:
+        pair_df["점착제코드"] = ""
+    pair_df["품목코드"] = to_text_series(pair_df["품목코드"], strip=True)
+    pair_df["점착제코드"] = to_text_series(pair_df["점착제코드"], strip=True)
+    pair_df = pair_df.drop_duplicates(ignore_index=True)
+    return pair_df
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -2714,10 +2733,30 @@ def build_quote_reference(q_ref):
             .tail(1)[overview_group_cols + ["날짜"]]
             .rename(columns={"날짜": "최근날짜"})
         )
+        overview_min_recent = (
+            positive_unit_df
+            .sort_values(overview_group_cols + ["단가(원/M2)", "날짜"], ascending=[True, True, True, True, False], kind="mergesort")
+            .groupby(overview_group_cols, as_index=False)
+            .head(1)[overview_group_cols + ["날짜"]]
+            .rename(columns={"날짜": "최저단가최근날짜"})
+        )
+        overview_max_recent = (
+            positive_unit_df
+            .sort_values(overview_group_cols + ["단가(원/M2)", "날짜"], ascending=[True, True, True, False, False], kind="mergesort")
+            .groupby(overview_group_cols, as_index=False)
+            .head(1)[overview_group_cols + ["날짜"]]
+            .rename(columns={"날짜": "최고단가최근날짜"})
+        )
         overview = overview.merge(overview_recent, on=overview_group_cols, how="left")
+        overview = overview.merge(overview_min_recent, on=overview_group_cols, how="left")
+        overview = overview.merge(overview_max_recent, on=overview_group_cols, how="left")
     else:
         overview["최근날짜"] = pd.NaT
+        overview["최저단가최근날짜"] = pd.NaT
+        overview["최고단가최근날짜"] = pd.NaT
     overview["최근날짜"] = pd.to_datetime(overview["최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    overview["최저단가최근날짜"] = pd.to_datetime(overview["최저단가최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    overview["최고단가최근날짜"] = pd.to_datetime(overview["최고단가최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
 
     monthly_pc = (
         df.groupby(["품목코드", "거래처", "월"], dropna=False)
@@ -2752,6 +2791,20 @@ def build_quote_reference(q_ref):
         )
         .reset_index()
     )
+    unit_min_recent = (
+        positive_unit_df
+        .sort_values(["품목코드", "거래처", "단가(원/M2)", "날짜"], ascending=[True, True, True, False], kind="mergesort")
+        .groupby(["품목코드", "거래처"], as_index=False)
+        .head(1)[["품목코드", "거래처", "날짜"]]
+        .rename(columns={"날짜": "최저단가최근날짜"})
+    )
+    unit_max_recent = (
+        positive_unit_df
+        .sort_values(["품목코드", "거래처", "단가(원/M2)", "날짜"], ascending=[True, True, False, False], kind="mergesort")
+        .groupby(["품목코드", "거래처"], as_index=False)
+        .head(1)[["품목코드", "거래처", "날짜"]]
+        .rename(columns={"날짜": "최고단가최근날짜"})
+    )
     unit_extreme["월평균_출고량"] = np.where(unit_extreme["개월수"] > 0, unit_extreme["총량_M2"] / unit_extreme["개월수"], 0)
     unit_extreme["월평균_매출"] = np.where(unit_extreme["개월수"] > 0, unit_extreme["총매출액"] / unit_extreme["개월수"], 0)
 
@@ -2784,6 +2837,8 @@ def build_quote_reference(q_ref):
         unit_extreme[["품목코드", "거래처", "최저단가", "최고단가"]],
         on=["품목코드", "거래처"], how="left"
     )
+    ref_detail = ref_detail.merge(unit_min_recent, on=["품목코드", "거래처"], how="left")
+    ref_detail = ref_detail.merge(unit_max_recent, on=["품목코드", "거래처"], how="left")
 
     ref_detail["최근날짜"] = pd.to_datetime(ref_detail["최근날짜"], errors="coerce")
     latest_overall_date = pd.to_datetime(df["날짜"], errors="coerce").max()
@@ -2792,6 +2847,9 @@ def build_quote_reference(q_ref):
         ref_detail["최근단가경과일"] = (latest_overall_date - ref_detail["최근날짜"]).dt.days
     else:
         ref_detail["최근단가경과일"] = np.nan
+
+    ref_detail["최저단가최근날짜"] = pd.to_datetime(ref_detail["최저단가최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    ref_detail["최고단가최근날짜"] = pd.to_datetime(ref_detail["최고단가최근날짜"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
 
     recent_price = pd.to_numeric(ref_detail["최근단가"], errors="coerce")
     min_price = pd.to_numeric(ref_detail["최저단가"], errors="coerce")
@@ -4393,12 +4451,23 @@ st.sidebar.header("검색 필터")
 dept_col = "담당부서" if "담당부서" in rec.columns else ("영업담당부서" if "영업담당부서" in rec.columns else None)
 manager_col = "담당자" if "담당자" in rec.columns else None
 
-dept_options, manager_options, cust_options, prod_options, adh_options, date_min, date_max = build_sidebar_filter_metadata(
-    rec,
-    dept_col=dept_col,
-    manager_col=manager_col,
+filter_source_signature = f"{len(file_bytes)}-{zlib.crc32(file_bytes[:1048576]) & 0xffffffff}"
+filter_meta_cache_key = f"{filter_source_signature}|{dept_col}|{manager_col}"
+if st.session_state.get("_filter_meta_cache_key") != filter_meta_cache_key:
+    st.session_state["_filter_meta_cache_key"] = filter_meta_cache_key
+    st.session_state["_filter_meta_cache_value"] = build_sidebar_filter_metadata(
+        rec,
+        dept_col=dept_col,
+        manager_col=manager_col,
+    )
+    st.session_state["_filter_pair_cache_value"] = build_filter_pair_frame(rec)
+
+dept_options, manager_options, cust_options, prod_options, adh_options, date_min, date_max = st.session_state.get(
+    "_filter_meta_cache_value",
+    ([], [], [], [], [], None, None),
 )
 default_start_date = get_default_filter_start_date(date_min, date_max)
+filter_pair_df = st.session_state.get("_filter_pair_cache_value", pd.DataFrame(columns=["품목코드", "점착제코드"]))
 
 initialize_filter_state("flt_sel_dept", [])
 initialize_filter_state("flt_sel_manager", [])
@@ -4422,10 +4491,6 @@ if date_min is not None and pd.notna(date_min):
 if date_max is not None and pd.notna(date_max):
     initialize_filter_state("flt_widget_end_date", sanitize_date_state(st.session_state.get("flt_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date()))
 
-if st.session_state.get("flt_reset_pending", False):
-    reset_filter_state_defaults(date_min=date_min, date_max=date_max)
-    st.session_state["flt_reset_pending"] = False
-
 # 업로드 파일이 바뀌거나 옵션 목록이 달라져도 이전 값이 잔류하지 않도록 위젯 상태를 정리
 st.session_state["flt_sel_dept"] = sanitize_multiselect_state(st.session_state.get("flt_sel_dept", []), dept_options)
 st.session_state["flt_sel_manager"] = sanitize_multiselect_state(st.session_state.get("flt_sel_manager", []), manager_options)
@@ -4445,7 +4510,7 @@ if date_max is not None and pd.notna(date_max):
     st.session_state["flt_widget_end_date"] = sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
 
 cross_prod_options, cross_adh_options = build_cross_filtered_option_sets(
-    rec,
+    filter_pair_df,
     prod_query=st.session_state.get("flt_prod_option_query", ""),
     adh_query=st.session_state.get("flt_adh_option_query", ""),
 )
@@ -4518,11 +4583,12 @@ with st.sidebar.form("search_filter_form", clear_on_submit=False):
 
     apply_col, reset_col = st.columns(2)
     apply_filters_clicked = apply_col.form_submit_button("필터 적용", use_container_width=True)
-    reset_filters_clicked = reset_col.form_submit_button("초기화", use_container_width=True)
-
-if reset_filters_clicked:
-    st.session_state["flt_reset_pending"] = True
-    st.rerun()
+    reset_filters_clicked = reset_col.form_submit_button(
+        "초기화",
+        use_container_width=True,
+        on_click=reset_filter_state_defaults,
+        kwargs={"date_min": date_min, "date_max": date_max},
+    )
 
 if apply_filters_clicked:
     set_filter_state_pair("flt_sel_dept", "flt_widget_sel_dept", sanitize_multiselect_state(st.session_state.get("flt_widget_sel_dept", []), dept_options))
@@ -4865,7 +4931,7 @@ if active_main_tab == "🔎 품목 검색":
                 else:
                     recent_overview, _, _, _ = build_quote_reference(q_recent_search)
                     overview_cols = [
-                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가", "최고단가", "거래처수",
+                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
                         "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                     ]
                     overview_cols = [c for c in overview_cols if c in recent_overview.columns]
@@ -4873,7 +4939,7 @@ if active_main_tab == "🔎 품목 검색":
                     clean_and_safe_display(
                         recent_overview[overview_cols] if overview_cols else pd.DataFrame(),
                         pinned_cols=["품목코드"],
-                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜"],
+                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가최근날짜", "최고단가최근날짜"],
                         height=None,
                         column_width_overrides={
                             "품목코드": 165,
@@ -4881,7 +4947,9 @@ if active_main_tab == "🔎 품목 검색":
                             "재단구분": 90,
                             "기준폭이력": 120,
                             "최근날짜": 95,
+                            "최저단가최근날짜": 95,
                             "최저단가": 70,
+                            "최고단가최근날짜": 95,
                             "최고단가": 70,
                             "거래처수": 70,
                             "총출고횟수": 85,
@@ -5072,8 +5140,8 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         top_n_value = st.slider(
                             "활용 레퍼런스 수 (Top N)",
                             min_value=3,
-                            max_value=20,
-                            value=15,
+                            max_value=25,
+                            value=20,
                             step=1,
                             key=top_n_key,
                             help="추천 기준단가 산정에 활용할 상위 유사 레퍼런스 개수. 적을수록 유사도 높은 거래처만 활용, 많을수록 분위수 안정성 향상."
@@ -5296,7 +5364,7 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
 
                 st.markdown("### 2) 품목 기준 견적 레퍼런스")
                 overview_cols = [
-                    "품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가", "최고단가", "거래처수",
+                    "품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
                     "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                 ]
                 overview_cols = [c for c in overview_cols if c in overview.columns]
@@ -5304,7 +5372,7 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                 clean_and_safe_display(
                     overview[overview_cols] if overview_cols else pd.DataFrame(),
                     pinned_cols=["품목코드"],
-                    text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜"],
+                    text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "최근날짜", "최저단가최근날짜", "최고단가최근날짜"],
                     height=None,
                     column_width_overrides={
                         "품목코드": 145,
@@ -5312,7 +5380,9 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         "재단구분": 80,
                         "기준폭이력": 100,
                         "최근날짜": 95,
+                        "최저단가최근날짜": 95,
                         "최저단가": 55,
+                        "최고단가최근날짜": 95,
                         "최고단가": 55,
                         "거래처수": 30,
                         "총출고횟수": 30,
@@ -5328,14 +5398,14 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                 rep_cols = [
                     "품목코드", "거래처", "업체성향", "AI분석",
                     "최근날짜", "최근단가", "최근단가경과일", "단가판단",
-                    "최저단가", "최고단가", "월평균_출고량", "월평균_매출", "최근추세", "총매출액"
+                    "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "월평균_출고량", "월평균_매출", "최근추세", "총매출액"
                 ]
                 rep_cols = [c for c in rep_cols if c in rep_ref.columns]
 
                 clean_and_safe_display(
                     rep_ref[rep_cols] if rep_cols else pd.DataFrame(),
                     pinned_cols=["품목코드", "거래처"],
-                    text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최근추세", "단가판단"],
+                    text_cols=["품목코드", "거래처", "업체성향", "AI분석", "최근날짜", "최저단가최근날짜", "최고단가최근날짜", "최근추세", "단가판단"],
                     height=None,
                     column_width_overrides={
                         "품목코드": 145,
@@ -5346,7 +5416,9 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         "최근단가": 80,
                         "최근단가경과일": 95,
                         "단가판단": 160,
+                        "최저단가최근날짜": 95,
                         "최저단가": 80,
+                        "최고단가최근날짜": 95,
                         "최고단가": 80,
                         "월평균_출고량": 95,
                         "월평균_매출": 95,
@@ -5358,7 +5430,7 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                 st.markdown("### 4) 대표 업체 레퍼런스 확장")
                 special_cols = [
                     "대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근단가",
-                    "최근단가경과일", "단가판단", "최저단가", "최고단가", "월평균_출고량", "월평균_매출",
+                    "최근단가경과일", "단가판단", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "월평균_출고량", "월평균_매출",
                     "최근추세", "총매출액", "AI분석"
                 ]
                 special_cols = [c for c in special_cols if c in special_ref.columns]
@@ -5366,7 +5438,7 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                 clean_and_safe_display(
                     special_ref[special_cols] if (not special_ref.empty and special_cols) else pd.DataFrame(columns=special_cols),
                     pinned_cols=["대표구분", "품목코드", "거래처"],
-                    text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최근추세", "AI분석", "단가판단"],
+                    text_cols=["대표구분", "품목코드", "거래처", "업체성향", "최근날짜", "최저단가최근날짜", "최고단가최근날짜", "최근추세", "AI분석", "단가판단"],
                     height=None,
                     column_width_overrides={
                         "대표구분": 150,
@@ -5377,7 +5449,9 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         "최근단가": 80,
                         "최근단가경과일": 95,
                         "단가판단": 160,
+                        "최저단가최근날짜": 95,
                         "최저단가": 80,
+                        "최고단가최근날짜": 95,
                         "최고단가": 80,
                         "월평균_출고량": 95,
                         "월평균_매출": 95,
