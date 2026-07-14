@@ -949,16 +949,12 @@ def render_filter_multiselect_expander(label, options, key, placeholder="Choose 
     current_all = option_count > 0 and len(current_values) >= option_count
 
     initialize_filter_state(all_key, current_all)
-    initialize_filter_state(prev_all_key, st.session_state.get(all_key, current_all))
+    initialize_filter_state(prev_all_key, current_all)
+    if st.session_state.get(all_key) != current_all:
+        st.session_state[all_key] = current_all
+    if st.session_state.get(prev_all_key) != current_all:
+        st.session_state[prev_all_key] = current_all
 
-    if st.session_state.get(all_key, False) and option_count > 0 and len(current_values) != option_count:
-        st.session_state[key] = list(options)
-        current_values = list(options)
-    elif (not st.session_state.get(all_key, False)) and st.session_state.get(prev_all_key, False) and current_all:
-        st.session_state[key] = []
-        current_values = []
-
-    st.session_state[prev_all_key] = st.session_state.get(all_key, False)
     summary = summarize_filter_selection(current_values, options)
 
     with st.expander(f"{label} · {summary}", expanded=False):
@@ -974,13 +970,27 @@ def render_filter_multiselect_expander(label, options, key, placeholder="Choose 
                 st.session_state[key] = list(options)
             st.caption("전체 선택 적용 중입니다. 부분 선택이 필요하면 체크를 해제하세요.")
         else:
-            st.multiselect(
-                label,
-                options,
-                key=key,
-                placeholder=placeholder,
-                label_visibility="collapsed",
-            )
+            if not options:
+                st.caption("표시할 옵션이 없습니다.")
+            else:
+                updated_values = []
+                for idx, option in enumerate(options):
+                    option_text = str(option)
+                    option_state_key = f"{key}_option_{idx}_{zlib.crc32(option_text.encode('utf-8')) & 0xffffffff}"
+                    expected_checked = option_text in current_values
+                    initialize_filter_state(option_state_key, expected_checked)
+                    if st.session_state.get(option_state_key) != expected_checked:
+                        st.session_state[option_state_key] = expected_checked
+                    checked = st.checkbox(option_text, key=option_state_key)
+                    if checked:
+                        updated_values.append(option_text)
+
+                updated_values = sanitize_multiselect_state(updated_values, options)
+                if updated_values != current_values:
+                    st.session_state[key] = list(updated_values)
+                    current_values = list(updated_values)
+
+        st.session_state[prev_all_key] = st.session_state.get(all_key, False)
 
 
 PLOTLY_RENDER_CONFIG = {
