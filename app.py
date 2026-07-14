@@ -4586,12 +4586,43 @@ if date_max is not None and pd.notna(date_max):
     st.session_state["flt_end_date"] = sanitize_date_state(st.session_state.get("flt_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
     st.session_state["flt_widget_end_date"] = sanitize_date_state(st.session_state.get("flt_widget_end_date", date_max.date()), date_min.date() if date_min is not None and pd.notna(date_min) else None, date_max.date())
 
+widget_sel_dept_for_options = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_dept", []), dept_options)
+widget_sel_manager_for_options = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_manager", []), manager_options)
+widget_sel_cust_for_options = sanitize_multiselect_state(st.session_state.get("flt_widget_sel_cust", []), cust_options)
+widget_start_date_for_options = sanitize_date_state(
+    st.session_state.get("flt_widget_start_date", default_start_date if default_start_date is not None else (date_min.date() if date_min is not None and pd.notna(date_min) else None)),
+    date_min.date() if date_min is not None and pd.notna(date_min) else None,
+    date_max.date() if date_max is not None and pd.notna(date_max) else None,
+) if date_min is not None and pd.notna(date_min) else None
+widget_end_date_for_options = sanitize_date_state(
+    st.session_state.get("flt_widget_end_date", date_max.date() if date_max is not None and pd.notna(date_max) else None),
+    date_min.date() if date_min is not None and pd.notna(date_min) else None,
+    date_max.date() if date_max is not None and pd.notna(date_max) else None,
+) if date_max is not None and pd.notna(date_max) else None
+
+widget_start_ts_for_options = pd.to_datetime(widget_start_date_for_options) if widget_start_date_for_options is not None else None
+widget_end_ts_for_options = pd.to_datetime(widget_end_date_for_options) if widget_end_date_for_options is not None else None
+if widget_end_ts_for_options is not None:
+    widget_end_ts_for_options = widget_end_ts_for_options + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+
+option_scope_df = apply_filters(
+    rec,
+    dept_col=dept_col,
+    manager_col=manager_col,
+    sel_dept=widget_sel_dept_for_options,
+    sel_manager=widget_sel_manager_for_options,
+    sel_cust=widget_sel_cust_for_options,
+    sel_prod=None,
+    sel_adh=None,
+    start_ts=widget_start_ts_for_options,
+    end_ts=widget_end_ts_for_options,
+)
+option_pair_df = build_filter_pair_frame(option_scope_df)
+
 cross_prod_options, cross_adh_options = build_cross_filtered_option_sets(
-    filter_pair_df,
+    option_pair_df,
     prod_query=st.session_state.get("flt_prod_option_query", ""),
     adh_query=st.session_state.get("flt_adh_option_query", ""),
-    selected_customers=tuple(st.session_state.get("flt_widget_sel_cust", [])),
-    all_customer_options=tuple(cust_options),
 )
 
 prod_display_options, prod_match_count = build_option_view(
