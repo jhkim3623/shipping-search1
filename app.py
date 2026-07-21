@@ -239,6 +239,14 @@ div[data-testid="stDataEditor"] [role="columnheader"] {
     font-weight: 700;
     margin-bottom: 0.2rem;
 }
+.sidebar-filter-title {
+    font-size: 1.52rem;
+    font-weight: 800;
+    line-height: 1.02;
+    margin: -0.56rem 0 0.34rem 0;
+    padding: 0;
+    color: #111827;
+}
 
 @media (max-width: 1024px) {
     .block-container {
@@ -260,6 +268,10 @@ div[data-testid="stDataEditor"] [role="columnheader"] {
     }
     .section-title {
         font-size: 1.2rem;
+    }
+    .sidebar-filter-title {
+        font-size: 1.38rem;
+        margin: -0.48rem 0 0.28rem 0;
     }
     div[data-testid="stMetric"] {
         min-height: 52px !important;
@@ -4550,7 +4562,7 @@ else:
 rec, alias, prod, adh, cust, bom, raw_cost = load_excel(file_bytes)
 cost_lookup = build_cost_lookup(bom, raw_cost)
 
-st.sidebar.header("검색 필터")
+st.sidebar.markdown('<div class="sidebar-filter-title">검색 필터</div>', unsafe_allow_html=True)
 
 dept_col = "담당부서" if "담당부서" in rec.columns else ("영업담당부서" if "영업담당부서" in rec.columns else None)
 manager_col = "담당자" if "담당자" in rec.columns else None
