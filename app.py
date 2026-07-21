@@ -2249,7 +2249,11 @@ def summarize_custom_bom_case(case_name, selections, loss_rate_pct, transport_co
 
     component_costs = [paper_cost, liner_cost, adh_cost, lam_cost, cut_cost]
     valid_costs = [float(v) for v in component_costs if pd.notna(v)]
-    material_sum = float(sum(valid_costs)) if valid_costs else np.nan
+    total_component_sum = float(sum(valid_costs)) if valid_costs else np.nan
+
+    raw_material_costs = [paper_cost, liner_cost, adh_cost]
+    valid_raw_material_costs = [float(v) for v in raw_material_costs if pd.notna(v)]
+    material_sum = float(sum(valid_raw_material_costs)) if valid_raw_material_costs else np.nan
     try:
         loss_rate_pct = float(loss_rate_pct)
     except Exception:
@@ -2258,8 +2262,8 @@ def summarize_custom_bom_case(case_name, selections, loss_rate_pct, transport_co
         transport_cost = float(transport_cost)
     except Exception:
         transport_cost = 0.0
-    loss_cost = material_sum * (loss_rate_pct / 100.0) if pd.notna(material_sum) else np.nan
-    mfg1 = material_sum + loss_cost if pd.notna(material_sum) else np.nan
+    loss_cost = total_component_sum * (loss_rate_pct / 100.0) if pd.notna(total_component_sum) else np.nan
+    mfg1 = total_component_sum + loss_cost if pd.notna(total_component_sum) else np.nan
     mfg2 = mfg1 + transport_cost if pd.notna(mfg1) else np.nan
 
     return {
