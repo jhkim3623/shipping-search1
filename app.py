@@ -142,13 +142,13 @@ div[data-baseweb="tag"] {
     margin-bottom: 0 !important;
 }
 
-/* 사이드바 상단 여백 최소화 */
+/* 사이드바 상단 여백 초미세 축소 */
 section[data-testid="stSidebar"] .block-container {
-    padding-top: 0.04rem !important;
+    padding-top: 0.01rem !important;
     padding-bottom: 0.55rem !important;
 }
 section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
-    margin-top: -0.14rem !important;
+    margin-top: -0.18rem !important;
 }
 
 /* 사이드바 필터 글씨 선명하게 */
@@ -247,7 +247,7 @@ div[data-testid="stDataEditor"] [role="columnheader"] {
         padding-top: 0.4rem;
     }
     section[data-testid="stSidebar"] .block-container {
-        padding-top: 0.03rem !important;
+        padding-top: 0.0rem !important;
         padding-bottom: 0.4rem !important;
     }
     html, body, [class*="css"] {
