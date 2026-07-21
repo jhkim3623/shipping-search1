@@ -5097,9 +5097,15 @@ if active_main_tab == "🔎 품목 검색":
                         if sort_cols:
                             product_search_view = product_search_view.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
 
+                    product_search_table_height = calc_table_height(
+                        product_search_view,
+                        min_rows=6,
+                        max_rows=14,
+                    )
+
                     clean_and_safe_display(
                         product_search_view,
-                        height=calc_table_height(product_search_view, min_rows=8, max_rows=22),
+                        height=product_search_table_height,
                         pinned_cols=["품목코드"],
                         text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "일자(低)", "일자(高)"],
                         column_width_overrides={
