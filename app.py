@@ -4523,9 +4523,7 @@ DEFAULT_FILE = "data.xlsx"
 
 st.markdown('<div class="app-main-title">출고 이력 검색(거래처/품목/가로폭/점착제)</div>', unsafe_allow_html=True)
 
-with st.sidebar.expander("데이터 파일 관리", expanded=False):
-    uploaded = st.file_uploader("엑셀 파일 업로드", type=["xlsx"], key="sidebar_data_uploader")
-    st.caption("업로드 시 해당 파일을 우선 사용하고, 미업로드 시 기본 data.xlsx를 사용합니다.")
+uploaded = st.session_state.get("sidebar_data_uploader")
 
 if uploaded:
     file_bytes = uploaded.getvalue()
@@ -4659,7 +4657,6 @@ adh_display_options, adh_match_count = build_option_view(
     limit=200,
 )
 
-st.sidebar.caption("🔎 옵션 찾기")
 st.sidebar.text_input("품목코드 옵션 찾기", key="flt_prod_option_query", placeholder="예: HY80")
 st.sidebar.caption(f"품목코드 후보: {prod_match_count:,}건" + (" (표시 최대 200건)" if prod_match_count > 200 else ""))
 st.sidebar.text_input("점착제코드 옵션 찾기", key="flt_adh_option_query", placeholder="예: P700")
@@ -4853,6 +4850,11 @@ else:
     q_quote_scope = rec.iloc[0:0].copy()
     q = rec.iloc[0:0].copy()
     st.sidebar.caption("현재 필터 결과: 적용 전")
+
+st.sidebar.markdown("---")
+with st.sidebar.expander("데이터 파일 관리", expanded=False):
+    uploaded = st.file_uploader("엑셀 파일 업로드", type=["xlsx"], key="sidebar_data_uploader")
+    st.caption("업로드 시 해당 파일을 우선 사용하고, 미업로드 시 기본 data.xlsx를 사용합니다.")
 
 if active_main_tab == "👥 거래처별 검색":
     if lazy_tabs_enabled and lazy_active_tab != "👥 거래처별 검색":
@@ -5097,7 +5099,7 @@ if active_main_tab == "🔎 품목 검색":
 
                     clean_and_safe_display(
                         product_search_view,
-                        height=calc_table_height(product_search_view, min_rows=1, max_rows=12),
+                        height=calc_table_height(product_search_view, min_rows=8, max_rows=22),
                         pinned_cols=["품목코드"],
                         text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "일자(低)", "일자(高)"],
                         column_width_overrides={
