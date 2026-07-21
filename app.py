@@ -142,6 +142,15 @@ div[data-baseweb="tag"] {
     margin-bottom: 0 !important;
 }
 
+/* 사이드바 상단 여백 축소 */
+section[data-testid="stSidebar"] .block-container {
+    padding-top: 0.18rem !important;
+    padding-bottom: 0.6rem !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
+    margin-top: -0.1rem !important;
+}
+
 /* 사이드바 필터 글씨 선명하게 */
 section[data-testid="stSidebar"] label[data-testid="stWidgetLabel"] p {
     color: #374151 !important;
@@ -236,6 +245,10 @@ div[data-testid="stDataEditor"] [role="columnheader"] {
         padding-left: 0.45rem;
         padding-right: 0.45rem;
         padding-top: 0.4rem;
+    }
+    section[data-testid="stSidebar"] .block-container {
+        padding-top: 0.1rem !important;
+        padding-bottom: 0.45rem !important;
     }
     html, body, [class*="css"] {
         font-size: 14px;
