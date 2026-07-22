@@ -224,6 +224,17 @@ div[data-testid="stDataEditor"] [role="columnheader"] {
     white-space: normal !important;
     line-height: 1.18 !important;
 }
+div[data-testid="stDataEditor"] [role="columnheader"] > div,
+div[data-testid="stDataEditor"] [role="columnheader"] [data-testid="stMarkdownContainer"] {
+    width: 100% !important;
+    text-align: center !important;
+    justify-content: center !important;
+}
+div[data-testid="stDataEditor"] [role="gridcell"][aria-colindex="2"],
+div[data-testid="stDataEditor"] [role="gridcell"][aria-colindex="2"] * {
+    text-align: center !important;
+    justify-content: center !important;
+}
 
 .app-main-title {
     display: block;
@@ -5898,13 +5909,13 @@ if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
             else:
                 editor_key = f"profit_editor_{selected_profit_customer}"
                 adjust_state_key = f"{editor_key}_adjust_map"
-                recent_dates = pd.to_datetime(cust_detail.get("최근날짜"), errors="coerce").dt.strftime("%Y-%m-%d") if "최근날짜" in cust_detail.columns else pd.Series([""] * len(cust_detail))
+                recent_dates = pd.to_datetime(cust_detail.get("최근날짜"), errors="coerce").dt.date if "최근날짜" in cust_detail.columns else pd.Series([None] * len(cust_detail))
                 recent_prices = pd.to_numeric(cust_detail["최근단가"], errors="coerce")
                 mfg1_values = pd.to_numeric(cust_detail["제조원가Ⅰ(㎡)"], errors="coerce")
                 mfg2_values = pd.to_numeric(cust_detail["제조원가Ⅱ(㎡)"], errors="coerce")
                 editor_seed = pd.DataFrame({
                     "품목코드": cust_detail["품목코드"].astype(str),
-                    "최근날짜": recent_dates.fillna(""),
+                    "최근날짜": recent_dates,
                     "최근단가": recent_prices,
                     "조정단가": recent_prices,
                     "제조원가Ⅰ": mfg1_values,
@@ -5931,7 +5942,7 @@ if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
                     disabled=[c for c in editor_seed.columns if c != "조정단가"],
                     column_config={
                         "품목코드": st.column_config.TextColumn("품목코드", width=150, pinned=True),
-                        "최근날짜": st.column_config.TextColumn("최근 날짜", width=96),
+                        "최근날짜": st.column_config.DateColumn("최근 날짜", format="YYYY-MM-DD", width=96),
                         "최근단가": st.column_config.NumberColumn("최근 단가", format="%,.0f", width=82),
                         "조정단가": st.column_config.NumberColumn("조정 단가", format="%,.0f", width=82),
                         "제조원가Ⅰ": st.column_config.NumberColumn("제조원가Ⅰ", format="%,.1f", width=82),
