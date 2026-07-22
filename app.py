@@ -5896,30 +5896,48 @@ if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
             if cust_detail.empty:
                 st.info("선택 거래처의 품목 데이터가 없습니다.")
             else:
+                editor_key = f"profit_editor_{selected_profit_customer}"
+                adjust_state_key = f"{editor_key}_adjust_map"
+                recent_dates = pd.to_datetime(cust_detail.get("최근날짜"), errors="coerce").dt.strftime("%Y-%m-%d") if "최근날짜" in cust_detail.columns else pd.Series([""] * len(cust_detail))
+                recent_prices = pd.to_numeric(cust_detail["최근단가"], errors="coerce")
+                mfg1_values = pd.to_numeric(cust_detail["제조원가Ⅰ(㎡)"], errors="coerce")
+                mfg2_values = pd.to_numeric(cust_detail["제조원가Ⅱ(㎡)"], errors="coerce")
                 editor_seed = pd.DataFrame({
                     "품목코드": cust_detail["품목코드"].astype(str),
-                    "최근단가": pd.to_numeric(cust_detail["최근단가"], errors="coerce"),
-                    "조정단가": pd.to_numeric(cust_detail["최근단가"], errors="coerce"),
-                    "제조원가Ⅰ": pd.to_numeric(cust_detail["제조원가Ⅰ(㎡)"], errors="coerce"),
-                    "제조원가Ⅱ": pd.to_numeric(cust_detail["제조원가Ⅱ(㎡)"], errors="coerce"),
+                    "최근날짜": recent_dates.fillna(""),
+                    "최근단가": recent_prices,
+                    "조정단가": recent_prices,
+                    "제조원가Ⅰ": mfg1_values,
+                    "공헌이익": np.nan,
+                    "제조원가Ⅱ": mfg2_values,
+                    "영업이익": np.nan,
                     "출고횟수": pd.to_numeric(cust_detail["출고횟수"], errors="coerce"),
                     "월평균_출고량": pd.to_numeric(cust_detail["월평균_출고량"], errors="coerce"),
                     "월평균_매출": pd.to_numeric(cust_detail["월평균_매출"], errors="coerce"),
                     "예상6개월수량(M2)": pd.to_numeric(cust_detail["예상6개월수량(M2)"], errors="coerce"),
                 })
+                previous_adjust_map = st.session_state.get(adjust_state_key, {})
+                if isinstance(previous_adjust_map, dict) and previous_adjust_map:
+                    prev_adjust_series = editor_seed["품목코드"].astype(str).map(previous_adjust_map)
+                    editor_seed["조정단가"] = prev_adjust_series.where(prev_adjust_series.notna(), editor_seed["조정단가"])
+                editor_seed["공헌이익"] = pd.to_numeric(editor_seed["조정단가"], errors="coerce") - pd.to_numeric(editor_seed["제조원가Ⅰ"], errors="coerce")
+                editor_seed["영업이익"] = pd.to_numeric(editor_seed["조정단가"], errors="coerce") - pd.to_numeric(editor_seed["제조원가Ⅱ"], errors="coerce")
                 st.markdown("#### 단가 조정 입력")
                 edited = st.data_editor(
                     editor_seed,
                     use_container_width=True,
                     hide_index=True,
-                    key=f"profit_editor_{selected_profit_customer}",
+                    key=editor_key,
                     disabled=[c for c in editor_seed.columns if c != "조정단가"],
                     column_config={
                         "품목코드": st.column_config.TextColumn("품목코드", width=150, pinned=True),
+                        "최근날짜": st.column_config.TextColumn("최근 날짜", width=96),
                         "최근단가": st.column_config.NumberColumn("최근 단가", format="%,.0f", width=82),
                         "조정단가": st.column_config.NumberColumn("조정 단가", format="%,.0f", width=82),
                         "제조원가Ⅰ": st.column_config.NumberColumn("제조원가Ⅰ", format="%,.1f", width=82),
+                        "공헌이익": st.column_config.NumberColumn("공헌이익", format="%,.1f", width=82),
                         "제조원가Ⅱ": st.column_config.NumberColumn("제조원가Ⅱ", format="%,.1f", width=82),
+                        "영업이익": st.column_config.NumberColumn("영업이익", format="%,.1f", width=82),
                         "출고횟수": st.column_config.NumberColumn("출고횟수", format="%,.0f", width=72),
                         "월평균_출고량": st.column_config.NumberColumn("월평균 출고량", format="%,.1f", width=96),
                         "월평균_매출": st.column_config.NumberColumn("월평균 매출", format="%,.0f", width=108),
@@ -5927,6 +5945,11 @@ if active_main_tab == "🏢 업체별 수익성 시뮬레이션":
                     },
                 )
                 adjusted_map = dict(zip(edited["품목코드"].astype(str), pd.to_numeric(edited["조정단가"], errors="coerce")))
+                normalized_previous_adjust_map = {str(k): (None if pd.isna(v) else float(v)) for k, v in previous_adjust_map.items()} if isinstance(previous_adjust_map, dict) else {}
+                normalized_adjusted_map = {str(k): (None if pd.isna(v) else float(v)) for k, v in adjusted_map.items()}
+                if normalized_adjusted_map != normalized_previous_adjust_map:
+                    st.session_state[adjust_state_key] = normalized_adjusted_map
+                    st.rerun()
                 cust_detail["조정단가"] = cust_detail["품목코드"].astype(str).map(adjusted_map)
                 cust_detail["조정_공헌이익률(%)"] = cust_detail.apply(lambda r: _margin_ratio(r.get("조정단가"), r.get("제조원가Ⅰ(㎡)")), axis=1)
                 cust_detail["조정_영업이익률(%)"] = cust_detail.apply(lambda r: _margin_ratio(r.get("조정단가"), r.get("제조원가Ⅱ(㎡)")), axis=1)
