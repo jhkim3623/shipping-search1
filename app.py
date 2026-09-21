@@ -2,10 +2,12 @@ import html
 import os
 import zlib
 import gc
+import sys
 from io import BytesIO
 
 import numpy as np
 import pandas as pd
+import plotly
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -4924,6 +4926,17 @@ else:
     st.sidebar.caption("현재 필터 결과: 적용 전")
 
 st.sidebar.markdown("---")
+with st.sidebar.expander("시스템 정보 (버전 확인)", expanded=False):
+    # [추가] requirements.txt 버전 고정 전, 실제 설치된 버전을 확인용.
+    # 배포된 앱에서는 오른쪽 아래 'Manage app' 로그에서도 확인할 수 있습니다.
+    st.caption("버전 고정 전 실제 설치 버전 확인용입니다.")
+    st.write(f"**Streamlit** : `{st.__version__}`")
+    st.write(f"**Pandas** : `{pd.__version__}`")
+    st.write(f"**NumPy** : `{np.__version__}`")
+    st.write(f"**Plotly** : `{getattr(plotly, '__version__', '확인 불가')}`")
+    st.write(f"**Python** : `{sys.version.split()[0]}`")
+    st.write(f"**확인 시각** : `{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}`")
+
 with st.sidebar.expander("데이터 파일 관리", expanded=False):
     uploaded = st.file_uploader("엑셀 파일 업로드", type=["xlsx"], key="sidebar_data_uploader")
     st.caption("업로드 시 해당 파일을 우선 사용하고, 미업로드 시 기본 data.xlsx를 사용합니다.")
