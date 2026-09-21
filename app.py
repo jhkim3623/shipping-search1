@@ -5764,9 +5764,56 @@ if active_main_tab == "🔄 제품 대체 전환":
                 st.warning("조건에 맞는 데이터가 없습니다.")
             else:
                 import re as _re
+                import html as _html
+
+                # ── HTML 시안과 동일한 형식용 스타일 (sw- 접두어로 기존 스타일과 분리) ──
+                st.markdown(
+                    """<style>
+                    .sw-h2{font-size:1.05rem;font-weight:800;color:#1c2430;margin:6px 0 4px;display:flex;align-items:center;gap:8px;}
+                    .sw-step{display:inline-flex;width:22px;height:22px;border-radius:6px;background:#1c2430;color:#fff;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+                    .sw-sub{font-size:0.84rem;color:#5b6675;margin-bottom:10px;}
+                    .sw-cell{border:1.5px solid #b7d6ff;border-radius:8px;padding:5px 12px 7px;background:#f8fbff;}
+                    .sw-cell .sw-k{font-size:11px;color:#8b95a5;font-weight:600;margin-bottom:1px;white-space:nowrap;}
+                    .sw-cell .sw-v{font-size:20px;font-weight:800;color:#1c2430;white-space:nowrap;}
+                    .sw-cell .sw-d{font-size:11px;color:#8b95a5;font-weight:500;margin-top:1px;white-space:nowrap;}
+                    .sw-condrow{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 2px;}
+                    .sw-cond{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;border-radius:8px;padding:5px 10px;border:1px solid #e2e7ee;background:#fafbfd;color:#5b6675;}
+                    .sw-cond .sw-n{width:16px;height:16px;border-radius:50%;background:#1c2430;color:#fff;font-size:10px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;}
+                    .sw-cond.hl{border-color:#b7d6ff;background:#eaf1ff;color:#1e46a8;}
+                    .sw-conv{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+                    .sw-tag{font-size:12px;background:#eef1f5;border-radius:8px;padding:5px 10px;color:#5b6675;}
+                    .sw-tag b{color:#1c2430;}
+                    .sw-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px;}
+                    .sw-kpi{border:1px solid #e2e7ee;border-radius:10px;padding:10px 14px;background:#fafbfd;}
+                    .sw-kpi .sw-k{font-size:11.5px;color:#8b95a5;font-weight:600;margin-bottom:3px;}
+                    .sw-kpi .sw-v{font-size:18px;font-weight:800;letter-spacing:-.3px;color:#1c2430;}
+                    .sw-kpi .sw-v.pos{color:#15803d;} .sw-kpi .sw-v.neg{color:#c02626;}
+                    .sw-chip{font-size:12.5px;font-weight:700;border-radius:8px;padding:5px 12px;background:#eaf1ff;color:#1e46a8;border:1px solid #ccdaff;display:inline-block;}
+                    .sw-chip.gray{background:#eef1f5;color:#5b6675;border-color:#e2e7ee;}
+                    .sw-t3{font-size:12px;font-weight:700;border-radius:99px;padding:4px 11px;background:#e8f6ec;color:#15803d;border:1px solid #bfe5cc;display:inline-block;}
+                    .sw-t3 .sw-r{font-weight:800;color:#0f6b31;}
+                    .sw-headrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 10px;}
+                    .sw-badge{display:inline-block;font-size:10.8px;font-weight:700;border-radius:6px;padding:2px 7px;white-space:nowrap;}
+                    .sw-b-same{background:#eaf1ff;color:#2563eb;}
+                    .sw-b-sub{background:#e6f7f5;color:#0d9488;}
+                    .sw-b-excl{background:#fdeaea;color:#c02626;}
+                    .sw-rank{display:inline-flex;min-width:22px;height:22px;padding:0 5px;border-radius:6px;align-items:center;justify-content:center;font-size:11.5px;font-weight:800;background:#eef1f5;color:#5b6675;}
+                    .sw-rank.top{background:#15803d;color:#fff;}
+                    .sw-disc{display:flex;align-items:center;gap:8px;}
+                    .sw-disc-bar{position:relative;flex:0 0 64px;height:7px;border-radius:99px;background:#eef1f5;overflow:hidden;display:inline-block;}
+                    .sw-disc-bar i{position:absolute;top:0;bottom:0;left:0;border-radius:99px;display:block;}
+                    .sw-disc-val{font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap;}
+                    .sw-d-strong{color:#15803d;} .sw-d-mid{color:#b45309;} .sw-d-low{color:#5b6675;} .sw-d-neg{color:#c02626;}
+                    .sw-won{color:#8b95a5;font-weight:600;}
+                    </style>""",
+                    unsafe_allow_html=True,
+                )
+
+                def _sw_h2(step, text):
+                    st.markdown(f'<div class="sw-h2"><span class="sw-step">{step}</span>{_html.escape(text)}</div>', unsafe_allow_html=True)
 
                 # ── 1) 품목 대체 정보 ─────────────────────────────────────────
-                st.markdown("#### 1) 품목 대체 정보")
+                _sw_h2(1, "품목 대체 정보")
                 prod_options_list = sorted(_sw_scope["품목코드"].dropna().astype(str).unique().tolist())
                 if not prod_options_list:
                     st.warning("선택 가능한 품목코드가 없습니다.")
@@ -5774,7 +5821,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                     if "sw_product" in st.session_state and st.session_state["sw_product"] not in prod_options_list:
                         st.session_state["sw_product"] = prod_options_list[0]
 
-                    _sw_c1, _sw_c2, _sw_c3, _sw_c4, _sw_c5 = st.columns([3, 1.2, 1.2, 1.2, 1.7])
+                    _sw_c1, _sw_c2, _sw_c3, _sw_c4, _sw_c5 = st.columns([3, 1.1, 1.1, 1.1, 1.7])
                     with _sw_c1:
                         base_code = st.selectbox("품목코드 (기준 품목)", prod_options_list, key="sw_product")
                     with _sw_c2:
@@ -5787,19 +5834,31 @@ if active_main_tab == "🔄 제품 대체 전환":
                     _sw_sqm_per_roll = float(sw_width) / 1000.0 * float(sw_length)
                     _sw_total_sqm = _sw_sqm_per_roll * float(sw_qty)
                     with _sw_c5:
-                        st.metric(
-                            "총수량 (㎡)",
-                            f"{_sw_total_sqm:,.0f}㎡",
-                            help=f"1롤 = {sw_width}mm × {sw_length}m = {_sw_sqm_per_roll:,.1f}㎡ · 수량 {sw_qty}롤",
+                        st.markdown(
+                            '<div class="sw-cell" style="margin-top:1px;">'
+                            '<div class="sw-k">총수량 (자동)</div>'
+                            f'<div class="sw-v num">{_sw_total_sqm:,.0f}<span style="font-size:13px;font-weight:500;color:#5b6675;"> ㎡</span></div>'
+                            f'<div class="sw-d">1롤 = {_sw_sqm_per_roll:,.1f}㎡ × {int(sw_qty)}롤</div>'
+                            '</div>',
+                            unsafe_allow_html=True,
                         )
 
                     _sw_family = str(base_code).split("/")[0]
                     _sw_w_lo = float(sw_width) - 20.0
                     _sw_w_hi = float(sw_width)
 
+                    st.markdown(
+                        '<div class="sw-condrow">'
+                        f'<span class="sw-cond hl"><span class="sw-n">1</span>동일 품목({_html.escape(base_code)}) 사용 업체 — 최우선 추천</span>'
+                        f'<span class="sw-cond"><span class="sw-n">2</span>폭 대체: 보유 폭 {sw_width:,.0f}mm → {_sw_w_lo:,.0f}~{_sw_w_hi:,.0f}mm 사용 업체 적용 가능 (−20mm 허용)</span>'
+                        f'<span class="sw-cond"><span class="sw-n">3</span>점착제 대체: {_html.escape(_sw_family)}/* 사용 업체 대체품 적용 가능</span>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+
                     # ── 2) 원가 카드 (견적 레퍼런스 · BOM_제조원가 연동) ──────────
-                    st.markdown("#### 2) 원가 카드 (견적 레퍼런스 · BOM_제조원가 연동)")
-                    st.caption("선택한 품목코드의 제조원가 — [견적 레퍼런스] 탭의 원가 카드와 동일한 데이터를 표시합니다.")
+                    _sw_h2(2, "원가 카드 (견적 레퍼런스 · BOM_제조원가 연동)")
+                    st.markdown('<div class="sw-sub">선택한 품목코드의 제조원가 — [견적 레퍼런스] 탭의 원가 카드와 동일한 데이터를 표시합니다.</div>', unsafe_allow_html=True)
                     _sw_cost_row = (
                         cost_lookup[cost_lookup["품목코드"].astype(str) == str(base_code)].copy()
                         if not cost_lookup.empty
@@ -5875,49 +5934,84 @@ if active_main_tab == "🔄 제품 대체 전환":
                         },
                     )
                     _sw_cost2 = float(_sw_cost_info.get("제조원가Ⅱ(㎡)", np.nan)) if pd.notna(_sw_cost_info.get("제조원가Ⅱ(㎡)", np.nan)) else np.nan
+                    _sw_cost1 = float(_sw_cost_info.get("제조원가Ⅰ(㎡)", np.nan)) if pd.notna(_sw_cost_info.get("제조원가Ⅰ(㎡)", np.nan)) else np.nan
 
-                    # ── 3) 프로모션 판매가 설정 ───────────────────────────────────
-                    st.markdown("#### 3) 프로모션 판매가 설정 (원/㎡ 단위 — 최근단가와 동일 단위)")
-                    st.caption("원가를 기준으로 판매가를 정하면 아래 4) 표의 할인률·업체 이익이 실시간으로 다시 계산됩니다. 할인률(%) = (최근단가 − 프로모션 판매가) ÷ 최근단가 × 100")
-                    sw_promo = st.number_input(
-                        "프로모션 판매가 (원/㎡)",
-                        min_value=0.0,
-                        max_value=100000.0,
-                        value=800.0,
-                        step=10.0,
-                        key="sw_promo_value",
+                    _sw_cost1_txt = f"{_sw_cost1 * _sw_sqm_per_roll:,.0f}원" if pd.notna(_sw_cost1) else "—"
+                    _sw_cost2_txt = f"{_sw_cost2 * _sw_sqm_per_roll:,.0f}원" if pd.notna(_sw_cost2) else "—"
+                    _sw_cost2_total_txt = f"{_sw_cost2 * _sw_total_sqm:,.0f}원" if pd.notna(_sw_cost2) else "—"
+                    st.markdown(
+                        '<div class="sw-conv">'
+                        f'<span class="sw-tag">1롤 = <b>{sw_width / 1000.0:.3f}m × {int(sw_length):,}m = <b>{_sw_sqm_per_roll:,.1f}㎡</b></b></span>'
+                        f'<span class="sw-tag">롤당 제조원가Ⅰ <b>약 {_sw_cost1_txt}</b></span>'
+                        f'<span class="sw-tag">롤당 제조원가Ⅱ <b>약 {_sw_cost2_txt}</b></span>'
+                        f'<span class="sw-tag"><b>{int(sw_qty)}</b>롤 총 제조원가Ⅱ 기준 <b>약 {_sw_cost2_total_txt}</b></span>'
+                        '</div>',
+                        unsafe_allow_html=True,
                     )
+
+                    # ── 3) 프로모션 판매가 설정 (숫자 입력 + 슬라이더 바) ─────────
+                    _sw_h2(3, "프로모션 판매가 설정 (원/㎡ 단위 — 최근단가와 동일 단위)")
+                    st.markdown('<div class="sw-sub">원가를 기준으로 판매가를 정하면 아래 4) 표의 할인률·업체 이익이 실시간으로 다시 계산됩니다. 할인률(%) = (최근단가 − 프로모션 판매가) ÷ 최근단가 × 100</div>', unsafe_allow_html=True)
+
+                    initialize_filter_state("sw_promo_value", 800.0)
+                    initialize_filter_state("sw_promo_slider", 800.0)
+                    _SW_SLIDER_MIN = 650
+                    _SW_SLIDER_MAX = 1050
+
+                    def _sw_sync_slider_from_number():
+                        try:
+                            _v = float(st.session_state.get("sw_promo_value", 800.0))
+                        except (TypeError, ValueError):
+                            return
+                        st.session_state["sw_promo_slider"] = float(min(max(_v, _SW_SLIDER_MIN), _SW_SLIDER_MAX))
+
+                    def _sw_sync_number_from_slider():
+                        st.session_state["sw_promo_value"] = float(st.session_state.get("sw_promo_slider", 800.0))
+
+                    _sw_p1, _ = st.columns([1, 2])
+                    with _sw_p1:
+                        sw_promo = st.number_input(
+                            "프로모션 판매가 (원/㎡)",
+                            min_value=0.0,
+                            max_value=100000.0,
+                            value=800.0,
+                            step=10.0,
+                            key="sw_promo_value",
+                            on_change=_sw_sync_slider_from_number,
+                        )
+                        st.slider(
+                            "판매가 조절 바",
+                            min_value=_SW_SLIDER_MIN,
+                            max_value=_SW_SLIDER_MAX,
+                            value=800,
+                            step=5,
+                            key="sw_promo_slider",
+                            on_change=_sw_sync_number_from_slider,
+                            help="숫자 입력 아래에서 바로 값을 움직일 수 있습니다.",
+                        )
+
                     _sw_promo = float(sw_promo)
-                    _sw_m1, _sw_m2, _sw_m3, _sw_m4 = st.columns(4)
                     _sw_margin = _sw_promo - _sw_cost2 if pd.notna(_sw_cost2) else np.nan
-                    _sw_m1.metric(
-                        "제조원가Ⅱ 대비 마진",
-                        f"{_sw_margin:+,.1f} 원/㎡" if pd.notna(_sw_margin) else "—",
-                        help="(프로모션 판매가 − 제조원가Ⅱ)",
-                    )
-                    _sw_m2.metric("롤당 판매가 환산", f"{_sw_promo * _sw_sqm_per_roll:,.0f} 원", help=f"{_sw_sqm_per_roll:,.1f}㎡/롤 기준")
-                    _sw_m3.metric(f"{int(sw_qty)}롤 총 예상 매출", f"{_sw_promo * _sw_total_sqm:,.0f} 원")
+                    _sw_margin_rate = (_sw_margin / _sw_cost2 * 100.0) if (pd.notna(_sw_cost2) and _sw_cost2) else np.nan
                     _sw_loss = (_sw_cost2 - _sw_promo) * _sw_total_sqm if pd.notna(_sw_cost2) else np.nan
-                    _sw_m4.metric(
-                        "제조원가Ⅱ 기준 손실액",
-                        f"{_sw_loss:,.0f} 원" if pd.notna(_sw_loss) else "—",
-                        help="(제조원가Ⅱ − 프로모션 판매가) × 총수량(㎡)",
+
+                    def _sw_kpi_html(k, v, cls="", d=""):
+                        _d = f'<div class="sw-d" style="font-size:11px;color:#8b95a5;margin-top:2px;">{d}</div>' if d else ""
+                        return f'<div class="sw-kpi"><div class="sw-k">{k}</div><div class="sw-v {cls}">{v}</div>{_d}</div>'
+
+                    _sw_margin_txt = f"{_sw_margin:+,.1f}원/㎡" if pd.notna(_sw_margin) else "—"
+                    _sw_margin_d = f"이익률 {_sw_margin_rate:+,.1f}% · (판매가−원가)÷원가" if pd.notna(_sw_margin_rate) else ""
+                    st.markdown(
+                        '<div class="sw-kpis">'
+                        + _sw_kpi_html("제조원가Ⅱ 대비 마진", _sw_margin_txt, "pos" if (pd.notna(_sw_margin) and _sw_margin >= 0) else "neg", _sw_margin_d)
+                        + _sw_kpi_html("롤당 판매가 환산", f"{_sw_promo * _sw_sqm_per_roll:,.0f}원", "", f"{_sw_sqm_per_roll:,.1f}㎡/롤 기준")
+                        + _sw_kpi_html(f"{int(sw_qty)}롤 총 예상 매출", f"{_sw_promo * _sw_total_sqm:,.0f}원", "", (f"총 제조원가 약 {_sw_cost2_total_txt} 대비" if pd.notna(_sw_cost2) else ""))
+                        + _sw_kpi_html("제조원가Ⅱ 기준 손실액", (f"{_sw_loss:,.0f}원" if _sw_loss > 0 else f"{_sw_loss:,.0f}원" if pd.notna(_sw_loss) else "—"), ("neg" if (pd.notna(_sw_loss) and _sw_loss > 0) else "pos"), f"(원가Ⅱ {_sw_cost2:,.1f} − 판매가 {_sw_promo:,.0f}) × 총 {_sw_total_sqm:,.0f}㎡" if pd.notna(_sw_cost2) else "")
+                        + '</div>',
+                        unsafe_allow_html=True,
                     )
 
                     # ── 4) 매칭 계산 (거래처별 품목탭) ────────────────────────────
-                    def _sw_parse_widths(v):
-                        if isinstance(v, (list, tuple, set)):
-                            _out = []
-                            for _x in v:
-                                try:
-                                    _out.append(float(_x))
-                                except (TypeError, ValueError):
-                                    pass
-                            return _out
-                        if v is None or (isinstance(v, float) and pd.isna(v)):
-                            return []
-                        return [float(x) for x in _re.findall(r"\d+(?:\.\d+)?", str(v))]
-
                     _sw_q = _sw_scope.copy()
                     if "날짜" in _sw_q.columns:
                         _sw_q["월"] = pd.to_datetime(_sw_q["날짜"], errors="coerce").dt.strftime("%Y-%m")
@@ -5927,14 +6021,13 @@ if active_main_tab == "🔄 제품 대체 전환":
                         if _c in _sw_q.columns:
                             _sw_q[_c] = to_text_series(_sw_q[_c])
 
-                    _sw_key_cols = [c for c in ["거래처", "품목코드", "점착제코드", "점착제명", "재단구분"] if c in _sw_q.columns]
-                    _sw_hist_cols = [c for c in ["거래처", "품목코드"] if c in _sw_q.columns]
-                    _sw_latest = build_filtered_recent_snapshot(
-                        _sw_q,
-                        _sw_key_cols,
-                        include_width_history=True,
-                        width_group_cols=_sw_hist_cols,
-                    )
+                    # 가로폭(mm) 하나하나가 개별 매칭 단위 — 해당 폭의 데이터값(횟수·최근단가 등)만 사용
+                    if "가로폭(mm)" not in _sw_q.columns:
+                        _sw_q["가로폭(mm)"] = np.nan
+                    _sw_q = _sw_q.dropna(subset=["가로폭(mm)"])
+
+                    _sw_key_cols = [c for c in ["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "가로폭(mm)"] if c in _sw_q.columns]
+                    _sw_latest = build_filtered_recent_snapshot(_sw_q, _sw_key_cols, include_width_history=False)
                     _sw_g = (
                         _sw_q.groupby(_sw_key_cols, dropna=False)
                         .agg(
@@ -5948,110 +6041,155 @@ if active_main_tab == "🔄 제품 대체 전환":
                     _sw_g = _sw_g.merge(_sw_latest, on=_sw_key_cols, how="left")
                     _sw_g["월평균_출고량"] = np.where(_sw_g["개월수"] > 0, _sw_g["총량_M2"] / _sw_g["개월수"], np.nan)
 
+                    def _sw_disc_html(d):
+                        if d >= 15:
+                            _cls, _color, _w = "sw-d-strong", "#15803d", min(d, 25.0) / 25.0 * 100.0
+                        elif d >= 8:
+                            _cls, _color, _w = "sw-d-mid", "#d97706", d / 25.0 * 100.0
+                        elif d >= 0:
+                            _cls, _color, _w = "sw-d-low", "#9aa4b2", d / 25.0 * 100.0
+                        else:
+                            _cls, _color, _w = "sw-d-neg", "#e0e0e0", 0.0
+                        _bar = f'<span class="sw-disc-bar"><i style="width:{_w:.0f}%;background:{_color}"></i></span>' if d >= 0 else ""
+                        _sign = "" if d >= 0 else "−"
+                        return f'<div class="sw-disc">{_bar}<span class="sw-disc-val {_cls}">{_sign}{abs(d):,.1f}%</span></div>'
+
                     _sw_rank_rows = []
                     _sw_excl_rows = []
                     for _, r in _sw_g.iterrows():
                         _code = str(r.get("품목코드", "") or "")
                         if not _code.startswith(_sw_family):
                             continue
-                        _widths_all = _sw_parse_widths(r.get("가로폭이력", ""))
-                        _widths_in = [w for w in _widths_all if _sw_w_lo <= w <= _sw_w_hi]
+                        _w_val = r.get("가로폭(mm)", np.nan)
                         _cust = str(r.get("거래처", "") or "")
                         _cut = str(r.get("재단구분", "") or "")
-                        _hist = str(r.get("가로폭이력", "") or "")
                         _last_date = str(r.get("최근날짜", "") or "")
                         _last_price = r.get("최근단가", np.nan)
 
-                        if not _widths_in:
-                            if not _widths_all:
-                                _reason = "가로폭 이력 없음"
-                            else:
-                                _wmax = max(_widths_all)
-                                _wmin = min(_widths_all)
-                                _reason = (
-                                    f"폭 초과 (최대 {_wmax:,.0f}mm > 보유 폭 {_sw_w_hi:,.0f}mm)"
-                                    if _wmin > _sw_w_hi
-                                    else f"폭 미달 (최소 {_wmin:,.0f}mm < 허용 하한 {_sw_w_lo:,.0f}mm)"
-                                )
-                            _sw_excl_rows.append(
-                                {"품목코드": _code, "거래처": _cust, "재단구분": _cut, "가로폭이력": _hist, "최근날짜": _last_date, "최근단가": _last_price, "사유": _reason}
+                        if not pd.notna(_w_val):
+                            _sw_excl_rows.append({"품목코드": _code, "거래처": _cust, "재단구분": _cut, "가로폭(mm)": "", "출고횟수": int(r.get("출고횟수", 0) or 0), "최근날짜": _last_date, "최근단가": _last_price, "사유": "가로폭 정보 없음"})
+                            continue
+                        _w_val = float(_w_val)
+                        if not (_sw_w_lo <= _w_val <= _sw_w_hi):
+                            _reason = (
+                                f"폭 초과 ({_w_val:,.0f}mm > 보유 폭 {_sw_w_hi:,.0f}mm)"
+                                if _w_val > _sw_w_hi
+                                else f"폭 미달 ({_w_val:,.0f}mm < 허용 하한 {_sw_w_lo:,.0f}mm)"
                             )
+                            _sw_excl_rows.append({"품목코드": _code, "거래처": _cust, "재단구분": _cut, "가로폭(mm)": f"{_w_val:,.0f}", "출고횟수": int(r.get("출고횟수", 0) or 0), "최근날짜": _last_date, "최근단가": _last_price, "사유": _reason})
                             continue
                         if pd.isna(_last_price) or float(_last_price) <= 0:
-                            _sw_excl_rows.append(
-                                {"품목코드": _code, "거래처": _cust, "재단구분": _cut, "가로폭이력": _hist, "최근날짜": _last_date, "최근단가": _last_price, "사유": "최근단가 없음"}
-                            )
+                            _sw_excl_rows.append({"품목코드": _code, "거래처": _cust, "재단구분": _cut, "가로폭(mm)": f"{_w_val:,.0f}", "출고횟수": int(r.get("출고횟수", 0) or 0), "최근날짜": _last_date, "최근단가": _last_price, "사유": "최근단가 없음"})
                             continue
 
                         _is_same = (_code == str(base_code))
-                        _tier1 = _is_same and any(abs(w - _sw_w_hi) < 1e-6 for w in _widths_in)
-                        _w_txt = ", ".join(f"{w:,.0f}" for w in sorted(_widths_in, reverse=True))
-                        _hist_txt = _hist if _hist else ""
-                        _width_col = f"{_hist_txt} (적용: {_w_txt})" if _hist_txt and _hist_txt != _w_txt else f"(적용: {_w_txt})"
+                        _tier1 = _is_same and abs(_w_val - _sw_w_hi) < 1e-6
                         _d_rate = (float(_last_price) - _sw_promo) / float(_last_price) * 100.0
+                        _profit = (float(_last_price) - _sw_promo) * _sw_total_sqm
                         _sw_rank_rows.append(
                             {
                                 "_tier1": _tier1,
+                                "_w": _w_val,
                                 "품목코드": _code,
                                 "거래처": _cust,
-                                "매칭": "동일품목" if _is_same else "점착제 대체",
+                                "_is_same": _is_same,
                                 "재단구분": _cut,
-                                "가로폭이력(적용폭)": _width_col,
                                 "출고횟수": int(r.get("출고횟수", 0) or 0),
-                                "최근날짜": _last_date,
-                                "최근단가": float(_last_price),
-                                "프로모션 판매가": _sw_promo,
+                                "_date": _last_date,
+                                "_price": float(_last_price),
                                 "_d_rate": _d_rate,
-                                "월평균_출고량": float(r.get("월평균_출고량", 0.0) or 0.0),
-                                "_profit": (float(_last_price) - _sw_promo) * _sw_total_sqm,
+                                "_avg_qty": float(r.get("월평균_출고량", 0.0) or 0.0),
+                                "_profit": _profit,
                             }
                         )
 
-                    st.markdown("#### 4) 판매가능한 업체와 품목")
-                    st.caption(
-                        f"순위 규칙 — ① 동일품목·동일사이즈 최상위 ② 출고횟수·출고수량(월평균_출고량) 높은 순 ③ 업체 이익 큰 순"
-                        f" · 폭 허용 구간 {_sw_w_lo:,.0f}~{_sw_w_hi:,.0f}mm (보유 폭 −20mm) · 업체 이익 = (최근단가 − 프로모션 판매가) × 총수량(㎡)"
-                    )
+                    _sw_h2(4, "판매가능한 업체와 품목")
                     _sw_rank_df = pd.DataFrame(_sw_rank_rows)
+
+                    def _sw_render_html_table(header_cells, body_rows, height):
+                        _thead = "".join(f'<th style="position:sticky;top:0;z-index:2;background:#f8fafc;color:#111827;border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;white-space:normal;width:{w}px;min-width:{w}px;">{_html.escape(h)}</th>' for h, w in header_cells)
+                        _tbody = "".join(f'<tr style="background:{bg};">{"".join(cells)}</tr>' for bg, cells in body_rows)
+                        st.markdown(
+                            f'<div style="border:1px solid #e5e7eb;border-radius:12px;overflow:auto;max-height:{int(height)}px;box-shadow:0 1px 2px rgba(15,23,42,0.04);">'
+                            f'<table style="width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:0.84rem;">'
+                            f'<thead><tr>{_thead}</tr></thead><tbody>{"".join(r for _, r in body_rows)}</tbody>'
+                            '</table></div>',
+                            unsafe_allow_html=True,
+                        )
+
                     if _sw_rank_df.empty:
                         st.info("매칭 가능한 거래처가 없습니다. 보유 폭이나 기준 품목을 바꿔 보세요.")
                     else:
                         _sw_rank_df = _sw_rank_df.sort_values(
-                            ["_tier1", "출고횟수", "월평균_출고량", "_profit"],
+                            ["_tier1", "출고횟수", "_avg_qty", "_profit"],
                             ascending=[False, False, False, False],
                             kind="mergesort",
                         ).reset_index(drop=True)
                         _sw_rank_df.insert(0, "순위", range(1, len(_sw_rank_df) + 1))
-                        _sw_rank_df["할인률(%)"] = _sw_rank_df["_d_rate"].map(lambda v: f"{v:,.1f}%")
-                        _sw_rank_df["업체 이익(원)"] = _sw_rank_df["_profit"].map(lambda v: f"{'+' if v >= 0 else '−'}{abs(v):,.0f} 원")
-                        _sw_show_cols = [
-                            "순위", "품목코드", "거래처", "매칭", "재단구분", "가로폭이력(적용폭)", "출고횟수",
-                            "최근날짜", "최근단가", "프로모션 판매가", "할인률(%)", "월평균_출고량", "업체 이익(원)",
-                        ]
-                        _sw_disp = _sw_rank_df[_sw_show_cols].copy()
-                        _sw_disp["최근단가"] = _sw_disp["최근단가"].map(lambda v: f"{v:,.0f}")
-                        _sw_disp["프로모션 판매가"] = _sw_disp["프로모션 판매가"].map(lambda v: f"{v:,.0f}")
-                        _sw_disp["월평균_출고량"] = _sw_disp["월평균_출고량"].map(lambda v: f"{v:,.1f}")
-                        render_compact_html_table(
-                            _sw_disp,
-                            height=calc_table_height(_sw_disp),
-                            column_width_overrides={
-                                "순위": 55,
-                                "품목코드": 150,
-                                "거래처": 150,
-                                "매칭": 92,
-                                "재단구분": 88,
-                                "가로폭이력(적용폭)": 230,
-                                "출고횟수": 75,
-                                "최근날짜": 95,
-                                "최근단가": 78,
-                                "프로모션 판매가": 108,
-                                "할인률(%)": 80,
-                                "월평균_출고량": 100,
-                                "업체 이익(원)": 112,
-                            },
+
+                        # 우선협의 TOP3 (순위 규칙 기준 거래처 첫 등장 순)
+                        _sw_seen = set()
+                        _sw_top3 = []
+                        for _, rr in _sw_rank_df.iterrows():
+                            if rr["거래처"] in _sw_seen:
+                                continue
+                            _sw_seen.add(rr["거래처"])
+                            _sw_top3.append(rr)
+                            if len(_sw_top3) == 3:
+                                break
+                        _sw_n_cust = _sw_rank_df["거래처"].nunique()
+                        _sw_top3_html = "".join(
+                            f'<span class="sw-t3">🏆 우선협의 {i + 1}위 {_html.escape(str(rr["거래처"]))} <span class="sw-r">최대 {rr["_d_rate"]:,.1f}%</span></span>'
+                            for i, rr in enumerate(_sw_top3)
                         )
-                        _sw_csv = _sw_disp.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                        st.markdown(
+                            '<div class="sw-headrow">'
+                            f'<span class="sw-chip">매칭 거래처 {_sw_n_cust}개 · 품목 {len(_sw_rank_df)}건</span>'
+                            '<span class="sw-chip gray">정렬: 동일품목·동일사이즈 → 출고횟수·출고수량 → 업체이익</span>'
+                            + _sw_top3_html
+                            + '</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                        _sw_headers = [
+                            ("순위", 55), ("품목코드", 150), ("거래처", 150), ("매칭", 92), ("재단구분", 88),
+                            ("가로폭이력(적용폭)", 130), ("출고횟수", 75), ("최근날짜", 95), ("최근단가", 78),
+                            ("프로모션 판매가", 108), ("할인률", 130), ("월평균_출고량", 100), ("업체 이익", 120),
+                        ]
+                        _sw_body = []
+                        for _, rr in _sw_rank_df.iterrows():
+                            _t1 = bool(rr["_tier1"])
+                            _bg = "#f4fbf6" if _t1 else ("#ffffff" if int(rr["순위"]) % 2 == 1 else "#fbfdff")
+                            _rank_html = f'<span class="sw-rank{" top" if _t1 else ""}">{int(rr["순위"])}</span>'
+                            _badge = f'<span class="sw-badge sw-b-same">동일품목</span>' if rr["_is_same"] else f'<span class="sw-badge sw-b-sub">점착제 대체</span>'
+                            _diff = int(rr["_w"]) - int(sw_width)
+                            _width_html = f'<b class="num">{rr["_w"]:,.0f}</b> <span style="color:#8b95a5;font-size:11px;">({_diff:+d}mm)</span>'.replace("-", "−")
+                            _profit = float(rr["_profit"])
+                            _sign = "+" if _profit >= 0 else "−"
+                            _pcls = "sw-d-strong" if _profit >= 0 else "sw-d-neg"
+                            _cells = [
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:center;vertical-align:middle;white-space:nowrap;">{_rank_html}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;font-weight:700;">{_html.escape(str(rr["품목코드"]))}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;font-weight:600;">{_html.escape(str(rr["거래처"]))}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;">{_badge}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;">{_html.escape(str(rr["재단구분"]))}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;">{_width_html}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;">{int(rr["출고횟수"]):,}<span class="sw-won">회</span></td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;">{_html.escape(str(rr["_date"]))}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;">{rr["_price"]:,.0f}<span class="sw-won">원</span></td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;font-weight:800;">{_sw_promo:,.0f}<span class="sw-won">원</span></td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;">{_sw_disc_html(float(rr["_d_rate"]))}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;">{rr["_avg_qty"]:,.1f}</td>',
+                                f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;"><span class="sw-disc-val {_pcls}">{_sign}{abs(_profit):,.0f}원</span></td>',
+                            ]
+                            _sw_body.append((_bg, "".join(_cells)))
+                        _sw_render_html_table(_sw_headers, _sw_body, height=calc_table_height(_sw_rank_df, min_rows=3, max_rows=18))
+
+                        _sw_csv_df = _sw_rank_df[["순위", "품목코드", "거래처", "_is_same", "재단구분", "_w", "출고횟수", "_date", "_price", "_avg_qty", "_d_rate", "_profit"]].copy()
+                        _sw_csv_df.columns = ["순위", "품목코드", "거래처", "매칭", "재단구분", "가로폭(mm)", "출고횟수", "최근날짜", "최근단가", "월평균_출고량", "할인률(%)", "업체 이익(원)"]
+                        _sw_csv_df["매칭"] = _sw_csv_df["매칭"].map(lambda v: "동일품목" if bool(v) else "점착제 대체")
+                        _sw_csv_df["할인률(%)"] = _sw_csv_df["할인률(%)"].map(lambda v: f"{v:,.1f}")
+                        _sw_csv = _sw_csv_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                         st.download_button(
                             "📥 판매가능 업체·품목 CSV 다운로드",
                             data=_sw_csv,
@@ -6062,11 +6200,22 @@ if active_main_tab == "🔄 제품 대체 전환":
                     _sw_excl_df = pd.DataFrame(_sw_excl_rows)
                     if not _sw_excl_df.empty:
                         with st.expander("제외 항목 보기 (폭 구간 밖 / 단가 없음)"):
-                            render_compact_html_table(
-                                _sw_excl_df,
-                                height=calc_table_height(_sw_excl_df),
-                                empty_message="제외 항목이 없습니다.",
-                            )
+                            _sw_ex_headers = [("품목코드", 150), ("거래처", 150), ("재단구분", 88), ("가로폭(mm)", 90), ("출고횟수", 75), ("최근날짜", 95), ("최근단가", 78), ("사유", 300)]
+                            _sw_ex_body = []
+                            for _, rr in _sw_excl_df.iterrows():
+                                _cells = [
+                                    f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;font-weight:600;color:#5b6675;">{_html.escape(str(rr["품목코드"]))}</td>',
+                                    f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;color:#5b6675;">{_html.escape(str(rr["거래처"]))}</td>',
+                                    f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;color:#5b6675;">{_html.escape(str(rr["재단구분"]))}</td>',
+                                    f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;color:#5b6675;">{_html.escape(str(rr["가로폭(mm)"]))}</td>',
+                                    f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;color:#5b6675;">{int(rr["출고횟수"]):,}회</td>',
+                                    f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;color:#5b6675;">{_html.escape(str(rr["최근날짜"]))}</td>',
+                                    f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;color:#5b6675;">{rr["최근단가"]:,.0f}원</td>' if pd.notna(rr["최근단가"]) else '<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:right;vertical-align:middle;white-space:nowrap;color:#5b6675;">—</td>',
+                                    f'<td style="border-bottom:1px solid #eef2f7;padding:7px 10px;text-align:left;vertical-align:middle;white-space:nowrap;"><span class="sw-badge sw-b-excl">{_html.escape(str(rr["사유"]))}</span></td>',
+                                ]
+                                _sw_ex_body.append(("#fbfbfc", "".join(_cells)))
+                            _sw_render_html_table(_sw_ex_headers, _sw_ex_body, height=calc_table_height(_sw_excl_df, min_rows=3, max_rows=18))
+                            st.caption("매칭 규칙: 가로폭이 보유 폭 −20mm ~ 보유 폭 구간에 포함되고 최근단가가 있어야 매칭됩니다. 가로폭이 여러 개여도 각 폭별로 개별 데이터값(출고횟수·최근단가 등)으로 판정합니다.")
 
 if active_main_tab == "💰 품목별 수익성":
     if lazy_tabs_enabled and lazy_active_tab != "💰 품목별 수익성":
