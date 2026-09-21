@@ -4834,6 +4834,7 @@ lazy_tab_labels = [
     "📦 품목별 검색",
     "🔎 품목 검색",
     "🏷️ 견적 레퍼런스",
+    "🔄 제품 대체 전환",
     "💰 품목별 수익성",
     "🏢 업체별 수익성 시뮬레이션",
     "🧾 원자재 원가 조회",
@@ -5743,6 +5744,329 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                     mime="text/csv",
                 )
 
+
+if active_main_tab == "🔄 제품 대체 전환":
+    if lazy_tabs_enabled and lazy_active_tab != "🔄 제품 대체 전환":
+        st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
+    else:
+        st.subheader("🔄 제품 대체 전환 — 품목 대체 정보 기반 프로모션 판매")
+        st.caption(
+            "반품 등 보유 재고를 품목 대체 규칙(동일품목 → 폭 대체(−20mm) → 점착제 대체)으로 매칭하고, "
+            "원가 기준 프로모션 판매가에 대한 업체별 할인률을 계산합니다. 기존 탭의 데이터·로직에는 영향을 주지 않습니다."
+        )
+
+        if not filters_ready:
+            st.info(filter_wait_message)
+        else:
+            _sw_scope = q_quote_scope.copy() if not q_quote_scope.empty else pd.DataFrame()
+
+            if _sw_scope.empty or "품목코드" not in _sw_scope.columns:
+                st.warning("조건에 맞는 데이터가 없습니다.")
+            else:
+                import re as _re
+
+                # ── 1) 품목 대체 정보 ─────────────────────────────────────────
+                st.markdown("#### 1) 품목 대체 정보")
+                prod_options_list = sorted(_sw_scope["품목코드"].dropna().astype(str).unique().tolist())
+                if not prod_options_list:
+                    st.warning("선택 가능한 품목코드가 없습니다.")
+                else:
+                    if "sw_product" in st.session_state and st.session_state["sw_product"] not in prod_options_list:
+                        st.session_state["sw_product"] = prod_options_list[0]
+
+                    _sw_c1, _sw_c2, _sw_c3, _sw_c4, _sw_c5 = st.columns([3, 1.2, 1.2, 1.2, 1.7])
+                    with _sw_c1:
+                        base_code = st.selectbox("품목코드 (기준 품목)", prod_options_list, key="sw_product")
+                    with _sw_c2:
+                        sw_width = st.number_input("폭 (mm)", min_value=50, max_value=2000, value=185, step=5, key="sw_width")
+                    with _sw_c3:
+                        sw_length = st.number_input("길이 (m)", min_value=10, max_value=5000, value=1000, step=50, key="sw_length")
+                    with _sw_c4:
+                        sw_qty = st.number_input("수량 (롤)", min_value=1, max_value=999, value=15, step=1, key="sw_qty")
+
+                    _sw_sqm_per_roll = float(sw_width) / 1000.0 * float(sw_length)
+                    _sw_total_sqm = _sw_sqm_per_roll * float(sw_qty)
+                    with _sw_c5:
+                        st.metric(
+                            "총수량 (㎡)",
+                            f"{_sw_total_sqm:,.0f}㎡",
+                            help=f"1롤 = {sw_width}mm × {sw_length}m = {_sw_sqm_per_roll:,.1f}㎡ · 수량 {sw_qty}롤",
+                        )
+
+                    _sw_family = str(base_code).split("/")[0]
+                    _sw_w_lo = float(sw_width) - 20.0
+                    _sw_w_hi = float(sw_width)
+
+                    # ── 2) 원가 카드 (견적 레퍼런스 · BOM_제조원가 연동) ──────────
+                    st.markdown("#### 2) 원가 카드 (견적 레퍼런스 · BOM_제조원가 연동)")
+                    st.caption("선택한 품목코드의 제조원가 — [견적 레퍼런스] 탭의 원가 카드와 동일한 데이터를 표시합니다.")
+                    _sw_cost_row = (
+                        cost_lookup[cost_lookup["품목코드"].astype(str) == str(base_code)].copy()
+                        if not cost_lookup.empty
+                        else pd.DataFrame()
+                    )
+                    _sw_cost_info = _sw_cost_row.iloc[0] if not _sw_cost_row.empty else pd.Series(dtype=object)
+                    _sw_card_columns = ["구분", "품목코드", "원지", "이형지", "점착제", "합지공정", "재단공정", "로스율", "운송판관비", "제조원가Ⅰ", "제조원가Ⅱ"]
+                    if _sw_cost_row.empty:
+                        _sw_cost_display = pd.DataFrame(
+                            [
+                                {
+                                    "구분": "BOM구성",
+                                    "품목코드": base_code,
+                                    "원지": "", "이형지": "", "점착제": "", "합지공정": "",
+                                    "재단공정": "", "로스율": "", "운송판관비": "", "제조원가Ⅰ": "", "제조원가Ⅱ": "",
+                                },
+                                {
+                                    "구분": "원가(㎡)",
+                                    "품목코드": "",
+                                    "원지": "", "이형지": "", "점착제": "", "합지공정": "",
+                                    "재단공정": "", "로스율": "", "운송판관비": "", "제조원가Ⅰ": "", "제조원가Ⅱ": "",
+                                },
+                            ],
+                            columns=_sw_card_columns,
+                        )
+                    else:
+                        _sw_cost_display = pd.DataFrame(
+                            [
+                                {
+                                    "구분": "BOM구성",
+                                    "품목코드": base_code,
+                                    "원지": _sw_cost_info.get("원지", ""),
+                                    "이형지": _sw_cost_info.get("이형지", ""),
+                                    "점착제": _sw_cost_info.get("점착제", ""),
+                                    "합지공정": _sw_cost_info.get("합지공정", ""),
+                                    "재단공정": _sw_cost_info.get("재단공정", ""),
+                                    "로스율": _fmt_pct((float(_sw_cost_info.get("로스율", np.nan)) * 100.0) if pd.notna(_sw_cost_info.get("로스율", np.nan)) else np.nan),
+                                    "운송판관비": "",
+                                    "제조원가Ⅰ": "",
+                                    "제조원가Ⅱ": "",
+                                },
+                                {
+                                    "구분": "원가(㎡)",
+                                    "품목코드": "",
+                                    "원지": _fmt_value(_sw_cost_info.get("원지원가"), 1),
+                                    "이형지": _fmt_value(_sw_cost_info.get("이형지원가"), 1),
+                                    "점착제": _fmt_value(_sw_cost_info.get("점착제원가"), 1),
+                                    "합지공정": _fmt_value(_sw_cost_info.get("합지원가"), 1),
+                                    "재단공정": _fmt_value(_sw_cost_info.get("재단원가"), 1),
+                                    "로스율": _fmt_value(_sw_cost_info.get("로스원가"), 1),
+                                    "운송판관비": _fmt_value(_sw_cost_info.get("운송판관비"), 1),
+                                    "제조원가Ⅰ": _fmt_value(_sw_cost_info.get("제조원가Ⅰ(㎡)"), 1),
+                                    "제조원가Ⅱ": _fmt_value(_sw_cost_info.get("제조원가Ⅱ(㎡)"), 1),
+                                },
+                            ],
+                            columns=_sw_card_columns,
+                        )
+                    render_compact_html_table(
+                        _sw_cost_display,
+                        height=calc_table_height(_sw_cost_display, min_rows=2, max_rows=2) + 18,
+                        column_width_overrides={
+                            "구분": 80,
+                            "품목코드": 145,
+                            "원지": 88,
+                            "이형지": 88,
+                            "점착제": 88,
+                            "합지공정": 88,
+                            "재단공정": 88,
+                            "로스율": 84,
+                            "운송판관비": 90,
+                            "제조원가Ⅰ": 92,
+                            "제조원가Ⅱ": 92,
+                        },
+                    )
+                    _sw_cost2 = float(_sw_cost_info.get("제조원가Ⅱ(㎡)", np.nan)) if pd.notna(_sw_cost_info.get("제조원가Ⅱ(㎡)", np.nan)) else np.nan
+
+                    # ── 3) 프로모션 판매가 설정 ───────────────────────────────────
+                    st.markdown("#### 3) 프로모션 판매가 설정 (원/㎡ 단위 — 최근단가와 동일 단위)")
+                    st.caption("원가를 기준으로 판매가를 정하면 아래 4) 표의 할인률·업체 이익이 실시간으로 다시 계산됩니다. 할인률(%) = (최근단가 − 프로모션 판매가) ÷ 최근단가 × 100")
+                    sw_promo = st.number_input(
+                        "프로모션 판매가 (원/㎡)",
+                        min_value=0.0,
+                        max_value=100000.0,
+                        value=800.0,
+                        step=10.0,
+                        key="sw_promo_value",
+                    )
+                    _sw_promo = float(sw_promo)
+                    _sw_m1, _sw_m2, _sw_m3, _sw_m4 = st.columns(4)
+                    _sw_margin = _sw_promo - _sw_cost2 if pd.notna(_sw_cost2) else np.nan
+                    _sw_m1.metric(
+                        "제조원가Ⅱ 대비 마진",
+                        f"{_sw_margin:+,.1f} 원/㎡" if pd.notna(_sw_margin) else "—",
+                        help="(프로모션 판매가 − 제조원가Ⅱ)",
+                    )
+                    _sw_m2.metric("롤당 판매가 환산", f"{_sw_promo * _sw_sqm_per_roll:,.0f} 원", help=f"{_sw_sqm_per_roll:,.1f}㎡/롤 기준")
+                    _sw_m3.metric(f"{int(sw_qty)}롤 총 예상 매출", f"{_sw_promo * _sw_total_sqm:,.0f} 원")
+                    _sw_loss = (_sw_cost2 - _sw_promo) * _sw_total_sqm if pd.notna(_sw_cost2) else np.nan
+                    _sw_m4.metric(
+                        "제조원가Ⅱ 기준 손실액",
+                        f"{_sw_loss:,.0f} 원" if pd.notna(_sw_loss) else "—",
+                        help="(제조원가Ⅱ − 프로모션 판매가) × 총수량(㎡)",
+                    )
+
+                    # ── 4) 매칭 계산 (거래처별 품목탭) ────────────────────────────
+                    def _sw_parse_widths(v):
+                        if isinstance(v, (list, tuple, set)):
+                            _out = []
+                            for _x in v:
+                                try:
+                                    _out.append(float(_x))
+                                except (TypeError, ValueError):
+                                    pass
+                            return _out
+                        if v is None or (isinstance(v, float) and pd.isna(v)):
+                            return []
+                        return [float(x) for x in _re.findall(r"\d+(?:\.\d+)?", str(v))]
+
+                    _sw_q = _sw_scope.copy()
+                    if "날짜" in _sw_q.columns:
+                        _sw_q["월"] = pd.to_datetime(_sw_q["날짜"], errors="coerce").dt.strftime("%Y-%m")
+                    else:
+                        _sw_q["월"] = ""
+                    for _c in ["거래처", "품목코드", "점착제코드", "점착제명", "재단구분"]:
+                        if _c in _sw_q.columns:
+                            _sw_q[_c] = to_text_series(_sw_q[_c])
+
+                    _sw_key_cols = [c for c in ["거래처", "품목코드", "점착제코드", "점착제명", "재단구분"] if c in _sw_q.columns]
+                    _sw_hist_cols = [c for c in ["거래처", "품목코드"] if c in _sw_q.columns]
+                    _sw_latest = build_filtered_recent_snapshot(
+                        _sw_q,
+                        _sw_key_cols,
+                        include_width_history=True,
+                        width_group_cols=_sw_hist_cols,
+                    )
+                    _sw_g = (
+                        _sw_q.groupby(_sw_key_cols, dropna=False)
+                        .agg(
+                            출고횟수=("수량(M2)", "count"),
+                            총량_M2=("수량(M2)", "sum"),
+                            매출액=("금액(원)", "sum"),
+                            개월수=("월", "nunique"),
+                        )
+                        .reset_index()
+                    )
+                    _sw_g = _sw_g.merge(_sw_latest, on=_sw_key_cols, how="left")
+                    _sw_g["월평균_출고량"] = np.where(_sw_g["개월수"] > 0, _sw_g["총량_M2"] / _sw_g["개월수"], np.nan)
+
+                    _sw_rank_rows = []
+                    _sw_excl_rows = []
+                    for _, r in _sw_g.iterrows():
+                        _code = str(r.get("품목코드", "") or "")
+                        if not _code.startswith(_sw_family):
+                            continue
+                        _widths_all = _sw_parse_widths(r.get("가로폭이력", ""))
+                        _widths_in = [w for w in _widths_all if _sw_w_lo <= w <= _sw_w_hi]
+                        _cust = str(r.get("거래처", "") or "")
+                        _cut = str(r.get("재단구분", "") or "")
+                        _hist = str(r.get("가로폭이력", "") or "")
+                        _last_date = str(r.get("최근날짜", "") or "")
+                        _last_price = r.get("최근단가", np.nan)
+
+                        if not _widths_in:
+                            if not _widths_all:
+                                _reason = "가로폭 이력 없음"
+                            else:
+                                _wmax = max(_widths_all)
+                                _wmin = min(_widths_all)
+                                _reason = (
+                                    f"폭 초과 (최대 {_wmax:,.0f}mm > 보유 폭 {_sw_w_hi:,.0f}mm)"
+                                    if _wmin > _sw_w_hi
+                                    else f"폭 미달 (최소 {_wmin:,.0f}mm < 허용 하한 {_sw_w_lo:,.0f}mm)"
+                                )
+                            _sw_excl_rows.append(
+                                {"품목코드": _code, "거래처": _cust, "재단구분": _cut, "가로폭이력": _hist, "최근날짜": _last_date, "최근단가": _last_price, "사유": _reason}
+                            )
+                            continue
+                        if pd.isna(_last_price) or float(_last_price) <= 0:
+                            _sw_excl_rows.append(
+                                {"품목코드": _code, "거래처": _cust, "재단구분": _cut, "가로폭이력": _hist, "최근날짜": _last_date, "최근단가": _last_price, "사유": "최근단가 없음"}
+                            )
+                            continue
+
+                        _is_same = (_code == str(base_code))
+                        _tier1 = _is_same and any(abs(w - _sw_w_hi) < 1e-6 for w in _widths_in)
+                        _w_txt = ", ".join(f"{w:,.0f}" for w in sorted(_widths_in, reverse=True))
+                        _hist_txt = _hist if _hist else ""
+                        _width_col = f"{_hist_txt} (적용: {_w_txt})" if _hist_txt and _hist_txt != _w_txt else f"(적용: {_w_txt})"
+                        _d_rate = (float(_last_price) - _sw_promo) / float(_last_price) * 100.0
+                        _sw_rank_rows.append(
+                            {
+                                "_tier1": _tier1,
+                                "품목코드": _code,
+                                "거래처": _cust,
+                                "매칭": "동일품목" if _is_same else "점착제 대체",
+                                "재단구분": _cut,
+                                "가로폭이력(적용폭)": _width_col,
+                                "출고횟수": int(r.get("출고횟수", 0) or 0),
+                                "최근날짜": _last_date,
+                                "최근단가": float(_last_price),
+                                "프로모션 판매가": _sw_promo,
+                                "_d_rate": _d_rate,
+                                "월평균_출고량": float(r.get("월평균_출고량", 0.0) or 0.0),
+                                "_profit": (float(_last_price) - _sw_promo) * _sw_total_sqm,
+                            }
+                        )
+
+                    st.markdown("#### 4) 판매가능한 업체와 품목")
+                    st.caption(
+                        f"순위 규칙 — ① 동일품목·동일사이즈 최상위 ② 출고횟수·출고수량(월평균_출고량) 높은 순 ③ 업체 이익 큰 순"
+                        f" · 폭 허용 구간 {_sw_w_lo:,.0f}~{_sw_w_hi:,.0f}mm (보유 폭 −20mm) · 업체 이익 = (최근단가 − 프로모션 판매가) × 총수량(㎡)"
+                    )
+                    _sw_rank_df = pd.DataFrame(_sw_rank_rows)
+                    if _sw_rank_df.empty:
+                        st.info("매칭 가능한 거래처가 없습니다. 보유 폭이나 기준 품목을 바꿔 보세요.")
+                    else:
+                        _sw_rank_df = _sw_rank_df.sort_values(
+                            ["_tier1", "출고횟수", "월평균_출고량", "_profit"],
+                            ascending=[False, False, False, False],
+                            kind="mergesort",
+                        ).reset_index(drop=True)
+                        _sw_rank_df.insert(0, "순위", range(1, len(_sw_rank_df) + 1))
+                        _sw_rank_df["할인률(%)"] = _sw_rank_df["_d_rate"].map(lambda v: f"{v:,.1f}%")
+                        _sw_rank_df["업체 이익(원)"] = _sw_rank_df["_profit"].map(lambda v: f"{'+' if v >= 0 else '−'}{abs(v):,.0f} 원")
+                        _sw_show_cols = [
+                            "순위", "품목코드", "거래처", "매칭", "재단구분", "가로폭이력(적용폭)", "출고횟수",
+                            "최근날짜", "최근단가", "프로모션 판매가", "할인률(%)", "월평균_출고량", "업체 이익(원)",
+                        ]
+                        _sw_disp = _sw_rank_df[_sw_show_cols].copy()
+                        _sw_disp["최근단가"] = _sw_disp["최근단가"].map(lambda v: f"{v:,.0f}")
+                        _sw_disp["프로모션 판매가"] = _sw_disp["프로모션 판매가"].map(lambda v: f"{v:,.0f}")
+                        _sw_disp["월평균_출고량"] = _sw_disp["월평균_출고량"].map(lambda v: f"{v:,.1f}")
+                        render_compact_html_table(
+                            _sw_disp,
+                            height=calc_table_height(_sw_disp),
+                            column_width_overrides={
+                                "순위": 55,
+                                "품목코드": 150,
+                                "거래처": 150,
+                                "매칭": 92,
+                                "재단구분": 88,
+                                "가로폭이력(적용폭)": 230,
+                                "출고횟수": 75,
+                                "최근날짜": 95,
+                                "최근단가": 78,
+                                "프로모션 판매가": 108,
+                                "할인률(%)": 80,
+                                "월평균_출고량": 100,
+                                "업체 이익(원)": 112,
+                            },
+                        )
+                        _sw_csv = _sw_disp.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                        st.download_button(
+                            "📥 판매가능 업체·품목 CSV 다운로드",
+                            data=_sw_csv,
+                            file_name="제품대체전환_매칭목록.csv",
+                            mime="text/csv",
+                        )
+
+                    _sw_excl_df = pd.DataFrame(_sw_excl_rows)
+                    if not _sw_excl_df.empty:
+                        with st.expander("제외 항목 보기 (폭 구간 밖 / 단가 없음)"):
+                            render_compact_html_table(
+                                _sw_excl_df,
+                                height=calc_table_height(_sw_excl_df),
+                                empty_message="제외 항목이 없습니다.",
+                            )
 
 if active_main_tab == "💰 품목별 수익성":
     if lazy_tabs_enabled and lazy_active_tab != "💰 품목별 수익성":
