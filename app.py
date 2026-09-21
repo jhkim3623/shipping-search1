@@ -6042,16 +6042,15 @@ if active_main_tab == "🔄 제품 대체 전환":
 
                     def _sw_disc_html(d):
                         if d >= 15:
-                            _cls, _color, _w = "sw-d-strong", "#15803d", min(d, 25.0) / 25.0 * 100.0
+                            _cls = "sw-d-strong"
                         elif d >= 8:
-                            _cls, _color, _w = "sw-d-mid", "#d97706", d / 25.0 * 100.0
+                            _cls = "sw-d-mid"
                         elif d >= 0:
-                            _cls, _color, _w = "sw-d-low", "#9aa4b2", d / 25.0 * 100.0
+                            _cls = "sw-d-low"
                         else:
-                            _cls, _color, _w = "sw-d-neg", "#e0e0e0", 0.0
-                        _bar = f'<span class="sw-disc-bar"><i style="width:{_w:.0f}%;background:{_color}"></i></span>' if d >= 0 else ""
+                            _cls = "sw-d-neg"
                         _sign = "" if d >= 0 else "−"
-                        return f'<div class="sw-disc">{_bar}<span class="sw-disc-val {_cls}">{_sign}{abs(d):,.1f}%</span></div>'
+                        return f'<span class="sw-disc-val {_cls}">{_sign}{abs(d):,.1f}%</span>'
 
                     _sw_rank_rows = []
                     _sw_excl_rows = []
@@ -6103,10 +6102,15 @@ if active_main_tab == "🔄 제품 대체 전환":
                         )
 
                     _sw_h2(4, "판매가능한 업체와 품목")
+                    st.caption(
+                        "순위 규칙 — ① 동일품목·동일사이즈 최상위 ② 출고횟수·출고수량(월평균_출고량) 높은 순 ③ 업체 이익 큰 순"
+                        f" · 폭 허용 구간 {_sw_w_lo:,.0f}~{_sw_w_hi:,.0f}mm (보유 폭 −20mm) · 출고횟수는 해당 가로폭의 출고 건수로 카운트"
+                        " · 업체 이익 = (최근단가 − 프로모션 판매가) × 총수량(㎡)"
+                    )
                     _sw_rank_df = pd.DataFrame(_sw_rank_rows)
 
                     def _sw_render_html_table(header_cells, body_rows, height):
-                        _thead = "".join(f'<th style="position:sticky;top:0;z-index:2;background:#f8fafc;color:#111827;border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;white-space:normal;width:{w}px;min-width:{w}px;">{_html.escape(h)}</th>' for h, w in header_cells)
+                        _thead = "".join(f'<th style="position:sticky;top:0;z-index:2;background:#f8fafc;color:#111827;border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;white-space:normal;width:{w}px;min-width:{w}px;">{_html.escape(h).replace("&lt;br&gt;", "<br>")}</th>' for h, w in header_cells)
                         _tbody = "".join(f'<tr style="background:{bg};">{"".join(cells)}</tr>' for bg, cells in body_rows)
                         st.markdown(
                             f'<div style="border:1px solid #e5e7eb;border-radius:12px;overflow:auto;max-height:{int(height)}px;box-shadow:0 1px 2px rgba(15,23,42,0.04);">'
@@ -6153,7 +6157,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                         _sw_headers = [
                             ("순위", 55), ("품목코드", 150), ("거래처", 150), ("매칭", 92), ("재단구분", 88),
                             ("가로폭이력(적용폭)", 130), ("출고횟수", 75), ("최근날짜", 95), ("최근단가", 78),
-                            ("프로모션 판매가", 108), ("할인률", 130), ("월평균_출고량", 100), ("업체 이익", 120),
+                            ("프로모션<br>판매가", 72), ("할인률", 70), ("월평균<br>출고량", 72), ("업체 이익", 120),
                         ]
                         _sw_body = []
                         for _, rr in _sw_rank_df.iterrows():
