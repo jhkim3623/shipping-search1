@@ -5772,10 +5772,9 @@ if active_main_tab == "🔄 제품 대체 전환":
                     .sw-h2{font-size:1.05rem;font-weight:800;color:#1c2430;margin:6px 0 4px;display:flex;align-items:center;gap:8px;}
                     .sw-step{display:inline-flex;width:22px;height:22px;border-radius:6px;background:#1c2430;color:#fff;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
                     .sw-sub{font-size:0.84rem;color:#5b6675;margin-bottom:10px;}
-                    .sw-cell{border:1.5px solid #b7d6ff;border-radius:8px;padding:5px 12px 7px;background:#f8fbff;}
-                    .sw-cell .sw-k{font-size:11px;color:#8b95a5;font-weight:600;margin-bottom:1px;white-space:nowrap;}
-                    .sw-cell .sw-v{font-size:20px;font-weight:800;color:#1c2430;white-space:nowrap;}
-                    .sw-cell .sw-d{font-size:11px;color:#8b95a5;font-weight:500;margin-top:1px;white-space:nowrap;}
+                    .sw-lbl{font-size:0.875rem;color:#5b6675;font-weight:600;margin-bottom:5px;white-space:nowrap;}
+                    .sw-input{border:1px solid rgba(49,51,63,0.2);border-radius:6px;background:#fff;height:38px;display:flex;align-items:center;padding:0 12px;font-size:0.98rem;font-weight:700;color:#1c2430;white-space:nowrap;}
+                    .sw-formula{font-size:11px;color:#8b95a5;font-weight:500;white-space:nowrap;line-height:1.4;margin-top:26px;}
                     .sw-condrow{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 2px;}
                     .sw-cond{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;border-radius:8px;padding:5px 10px;border:1px solid #e2e7ee;background:#fafbfd;color:#5b6675;}
                     .sw-cond .sw-n{width:16px;height:16px;border-radius:50%;background:#1c2430;color:#fff;font-size:10px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;}
@@ -5821,7 +5820,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                     if "sw_product" in st.session_state and st.session_state["sw_product"] not in prod_options_list:
                         st.session_state["sw_product"] = prod_options_list[0]
 
-                    _sw_c1, _sw_c2, _sw_c3, _sw_c4, _sw_c5 = st.columns([3, 1.1, 1.1, 1.1, 1.7])
+                    _sw_c1, _sw_c2, _sw_c3, _sw_c4, _sw_c5, _sw_c6 = st.columns([3, 1.1, 1.1, 1.1, 1.1, 1.5])
                     with _sw_c1:
                         base_code = st.selectbox("품목코드 (기준 품목)", prod_options_list, key="sw_product")
                     with _sw_c2:
@@ -5835,11 +5834,13 @@ if active_main_tab == "🔄 제품 대체 전환":
                     _sw_total_sqm = _sw_sqm_per_roll * float(sw_qty)
                     with _sw_c5:
                         st.markdown(
-                            '<div class="sw-cell" style="margin-top:1px;">'
-                            '<div class="sw-k">총수량 (자동)</div>'
-                            f'<div class="sw-v num">{_sw_total_sqm:,.0f}<span style="font-size:13px;font-weight:500;color:#5b6675;"> ㎡</span></div>'
-                            f'<div class="sw-d">1롤 = {_sw_sqm_per_roll:,.1f}㎡ × {int(sw_qty)}롤</div>'
-                            '</div>',
+                            '<div class="sw-lbl">총수량 (자동)</div>'
+                            f'<div class="sw-input">{_sw_total_sqm:,.0f} ㎡</div>',
+                            unsafe_allow_html=True,
+                        )
+                    with _sw_c6:
+                        st.markdown(
+                            f'<div class="sw-formula">1롤 = {_sw_sqm_per_roll:,.1f}㎡ × {int(sw_qty):,}롤<br>= 총 {_sw_total_sqm:,.0f}㎡</div>',
                             unsafe_allow_html=True,
                         )
 
@@ -5953,8 +5954,6 @@ if active_main_tab == "🔄 제품 대체 전환":
                     _sw_h2(3, "프로모션 판매가 설정 (원/㎡ 단위 — 최근단가와 동일 단위)")
                     st.markdown('<div class="sw-sub">원가를 기준으로 판매가를 정하면 아래 4) 표의 할인률·업체 이익이 실시간으로 다시 계산됩니다. 할인률(%) = (최근단가 − 프로모션 판매가) ÷ 최근단가 × 100</div>', unsafe_allow_html=True)
 
-                    initialize_filter_state("sw_promo_value", 800.0)
-                    initialize_filter_state("sw_promo_slider", 800.0)
                     _SW_SLIDER_MIN = 650
                     _SW_SLIDER_MAX = 1050
 
@@ -6112,7 +6111,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                         st.markdown(
                             f'<div style="border:1px solid #e5e7eb;border-radius:12px;overflow:auto;max-height:{int(height)}px;box-shadow:0 1px 2px rgba(15,23,42,0.04);">'
                             f'<table style="width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:0.84rem;">'
-                            f'<thead><tr>{_thead}</tr></thead><tbody>{"".join(r for _, r in body_rows)}</tbody>'
+                            f'<thead><tr>{_thead}</tr></thead><tbody>{_tbody}</tbody>'
                             '</table></div>',
                             unsafe_allow_html=True,
                         )
