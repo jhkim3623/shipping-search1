@@ -1,6 +1,7 @@
 import html
 import os
 import zlib
+import gc
 from io import BytesIO
 
 import numpy as np
@@ -759,7 +760,12 @@ def render_compact_html_table(
     for col in display_df.columns:
         width = column_width_overrides.get(col)
         style_width = f"width:{int(width)}px; min-width:{int(width)}px;" if width is not None else ""
-        col_defs.append((col, style_width, 'center' if col in center_cols else None))
+        # [최적화] 셀마다 반복 계산하던 수치형 판정/정렬 결정을 컬럼 단위로 1회만 수행
+        if col in center_cols:
+            _align = 'center'
+        else:
+            _align = 'right' if pd.api.types.is_numeric_dtype(display_df[col]) else 'left'
+        col_defs.append((col, style_width, _align))
 
     thead_cells = []
     for col, style_width, _ in col_defs:
@@ -768,20 +774,25 @@ def render_compact_html_table(
         )
 
     tbody_rows = []
-    for row_idx in range(len(display_df)):
-        row = display_df.iloc[row_idx]
+    # [최적화] display_df.iloc[행] 방식은 행마다 Series 를 새로 만들어 매우 느립니다.
+    # itertuples 로 튜플을 순회하도록 바꾸어 렌더링 속도를 크게 개선했습니다(출력 동일).
+    _display_view = display_df
+    if DISPLAY_MAX_ROWS_FOR_HTML and len(_display_view) > int(DISPLAY_MAX_ROWS_FOR_HTML):
+        _display_view = _display_view.head(int(DISPLAY_MAX_ROWS_FOR_HTML))
+    for row_idx, row in enumerate(_display_view.itertuples(index=False, name=None)):
         bg = '#ffffff' if row_idx % 2 == 0 else '#fbfdff'
         tds = []
-        for col, style_width, forced_align in col_defs:
-            raw_val = row[col]
+        for (col, style_width, align), raw_val in zip(col_defs, row):
             formatted = html.escape(_format_value(col, raw_val))
-            align = forced_align
-            if align is None:
-                align = 'right' if pd.api.types.is_numeric_dtype(display_df[col]) else 'left'
             tds.append(
                 f'<td style="border-bottom:1px solid #eef2f7; padding:7px 10px; text-align:{align}; vertical-align:middle; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; {style_width}">{formatted}</td>'
             )
         tbody_rows.append(f'<tr style="background:{bg};">{"".join(tds)}</tr>')
+    if len(tbody_rows) < len(display_df):
+        tbody_rows.append(
+            f'<tr><td colspan="{len(col_defs)}" style="padding:8px 10px; text-align:center; color:#64748b; background:#f8fafc;">'
+            f'표시 성능을 위해 전체 {len(display_df):,}행 중 상위 {len(tbody_rows):,}행만 표시했습니다.</td></tr>'
+        )
 
     html_table = (
         f'<div style="border:1px solid #e5e7eb; border-radius:12px; overflow:auto; max-height:{int(height)}px; box-shadow:0 1px 2px rgba(15, 23, 42, 0.04);">'
@@ -805,8 +816,12 @@ def sorted_unique(series):
         return []
 
 
-CACHE_DATA_LARGE_MAX_ENTRIES = 2
-CACHE_DATA_MEDIUM_MAX_ENTRIES = 6
+# [최적화] HTML 표로 렌더링할 최대 행 수. 0 = 무제한(기존과 동일).
+# 대용량 원자료 표에서 메모리/렌더링 속도를 개선하려면 500~2000 사이 값 권장.
+DISPLAY_MAX_ROWS_FOR_HTML = 0
+
+CACHE_DATA_LARGE_MAX_ENTRIES = 1
+CACHE_DATA_MEDIUM_MAX_ENTRIES = 3
 
 
 def optimize_dataframe_memory(df, text_threshold=0.6, category_sample_size=4000):
@@ -1929,13 +1944,29 @@ def load_excel(file_bytes):
         al = df["별칭"].astype(str).str.strip().tolist()
         cl = df["공식코드"].astype(str).str.strip().tolist()
 
-        out = []
-        for v in series.astype(str).fillna("").str.strip():
-            m = next((c for a, c in zip(al, cl) if v == a), None)
-            if m is None:
-                m = next((c for a, c in zip(al, cl) if a and a in v), None)
-            out.append(m)
-        return pd.Series(out, index=series.index)
+        # [최적화] 기존 이중 루프(O(행수 x 별칭수))를 정확일치 dict 매핑으로 전환.
+        # 1) 완전일치를 dict 로 O(1) 조회 → 2) 실패한 행만 부분일치 스캔.
+        # 별칭 목록 순서를 그대로 유지하므로 반환값은 기존 로직과 동일합니다.
+        s = series.astype(str).fillna("").str.strip()
+        exact_map = {}
+        for a, c in zip(al, cl):
+            if a and a not in exact_map:
+                exact_map[a] = c
+
+        mapped = s.map(exact_map).astype(object)
+        mask = (mapped.isna() & s.ne("")).to_numpy()
+        if mask.any():
+            pos = np.flatnonzero(mask)
+            out = []
+            for v in s.to_numpy()[mask]:
+                m = None
+                for a, c in zip(al, cl):
+                    if a and a in v:
+                        m = c
+                        break
+                out.append(m)
+            mapped.iloc[pos] = out
+        return mapped
 
     for col, typ in [("품목코드", "품목"), ("점착제코드", "점착제")]:
         src = "품목명_고객표현" if typ == "품목" else "점착제_고객표현"
@@ -4576,6 +4607,7 @@ else:
 
 rec, alias, prod, adh, cust, bom, raw_cost = load_excel(file_bytes)
 cost_lookup = build_cost_lookup(bom, raw_cost)
+gc.collect()  # [최적화] 엑셀 파싱/머지 직후 임시 객체 즉시 회수
 
 st.sidebar.markdown('<div class="sidebar-filter-title">검색 필터</div>', unsafe_allow_html=True)
 
@@ -8191,7 +8223,7 @@ if active_main_tab == "📉 매출 감소 품목 분석":
                                 selected_item_raw = selected_item_raw.sort_values("날짜", ascending=False)
 
                             raw_cols = [c for c in [
-                                "날짜", "거래처", "품목코드", "품목표시",
+                                "날짜", "거래처", "품목코드",
                                 "점착제코드", "가로폭(mm)", "수량(M2)", "단가(원/M2)", "금액(원)", "비고"
                             ] if c in selected_item_raw.columns]
 
@@ -8201,12 +8233,11 @@ if active_main_tab == "📉 매출 감소 품목 분석":
                                 clean_and_safe_display(
                                     selected_item_raw[raw_cols],
                                     pinned_cols=["날짜", "거래처", "품목코드"],
-                                    text_cols=["날짜", "거래처", "품목코드", "품목표시", "점착제코드", "비고"],
+                                    text_cols=["날짜", "거래처", "품목코드", "점착제코드", "비고"],
                                     column_width_overrides={
                                         "날짜": 95,
                                         "거래처": 140,
                                         "품목코드": 140,
-                                        "품목표시": 220,
                                         "점착제코드": 90,
                                         "가로폭(mm)": 85,
                                         "수량(M2)": 95,
