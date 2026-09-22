@@ -475,6 +475,72 @@ def build_filtered_recent_snapshot(df, group_cols, include_width_history=False, 
     return latest
 
 
+def build_customer_history_table(q_input):
+    """선택한 품목 1개에 대한 거래처별 출고 이력 요약 (신규 섹션 전용).
+
+    👥 거래처별 검색 탭과 동일한 계산식(그룹집계 + 최근 스냅샷 + 재단구분/기준폭 이력 병합)을
+    사용하되, 탭 코드와 분리된 전용 함수로 제공해 기존 탭 로직에는 영향을 주지 않는다.
+    품목 1개분의 작은 데이터만 넣어 계산하도록 설계되어 고속 모드에서도 추가 부하가 거의 없다.
+    """
+    if q_input is None or q_input.empty:
+        return pd.DataFrame()
+
+    q1 = q_input.copy()
+    if "날짜" in q1.columns:
+        q1["월"] = pd.to_datetime(q1["날짜"], errors="coerce").dt.strftime("%Y-%m")
+    else:
+        q1["월"] = ""
+
+    for c in ["거래처", "품목코드", "점착제코드", "점착제명", "재단구분"]:
+        if c in q1.columns:
+            q1[c] = to_text_series(q1[c])
+
+    key_cols = [c for c in ["거래처", "품목코드", "점착제코드", "점착제명"] if c in q1.columns]
+    if not key_cols:
+        return pd.DataFrame()
+
+    history_group_cols = [c for c in ["거래처", "품목코드"] if c in q1.columns]
+
+    latest_info = build_filtered_recent_snapshot(
+        q1,
+        key_cols,
+        include_width_history=True,
+        width_group_cols=history_group_cols,
+    )
+    cut_history = build_group_history_frame(q1, history_group_cols, "재단구분", "재단구분")
+    base_width_history = build_group_history_frame(q1, history_group_cols, "기준폭", "기준폭이력")
+
+    g = (
+        q1.groupby(key_cols, dropna=False)
+        .agg(
+            출고횟수=("수량(M2)", "count"),
+            총량_M2=("수량(M2)", "sum"),
+            매출액=("금액(원)", "sum"),
+            개월수=("월", "nunique"),
+        )
+        .reset_index()
+    )
+    g = g.merge(latest_info, on=key_cols, how="left")
+    g["월평균_출고량"] = np.where(g["개월수"] > 0, g["총량_M2"] / g["개월수"], np.nan)
+    g["월평균_매출"] = np.where(g["개월수"] > 0, g["매출액"] / g["개월수"], np.nan)
+    if not cut_history.empty:
+        g = g.merge(cut_history, on=history_group_cols, how="left")
+    if not base_width_history.empty:
+        g = g.merge(base_width_history, on=history_group_cols, how="left")
+
+    g["가중평균단가"] = np.where(g["총량_M2"] > 0, (g["매출액"] / g["총량_M2"]).round(0), 0)
+
+    ordered_cols = [
+        "거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력",
+        "최근날짜", "최근단가", "출고횟수", "월평균_출고량", "월평균_매출",
+        "총량_M2", "매출액", "가중평균단가"
+    ]
+    ordered_cols = [c for c in ordered_cols if c in g.columns]
+    sc = [c for c in ["거래처", "품목코드"] if c in g.columns]
+    out = g[ordered_cols].sort_values(sc) if sc else g[ordered_cols]
+    return out.reset_index(drop=True)
+
+
 def clean_and_safe_display(
     df,
     height=None,
@@ -484,6 +550,7 @@ def clean_and_safe_display(
     text_cols=None,
     disabled_cols=None,
     column_width_overrides=None,
+    selection_key=None,
 ):
     if df is None:
         df = pd.DataFrame()
@@ -646,6 +713,19 @@ def clean_and_safe_display(
             hide_index=True,
             disabled=disabled_cols,
         )
+
+    if selection_key:
+        selection_event = st.dataframe(
+            display_df,
+            column_config=column_config,
+            use_container_width=True,
+            height=final_height,
+            hide_index=True,
+            key=selection_key,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+        return selection_event
 
     st.dataframe(
         display_df,
@@ -5191,7 +5271,7 @@ if active_main_tab == "🔎 품목 검색":
                         max_rows=14,
                     )
 
-                    clean_and_safe_display(
+                    product_search_event = clean_and_safe_display(
                         product_search_view,
                         height=product_search_table_height,
                         pinned_cols=["품목코드"],
@@ -5212,7 +5292,69 @@ if active_main_tab == "🔎 품목 검색":
                             "총량_M2": 85,
                             "총매출액": 110,
                         },
+                        selection_key="product_search_row_select",
                     )
+
+                    # ── 신규: 선택 품목 거래처별 분석 (탭 이동 없이 하단 표시) ──
+                    _ps_sel_rows = []
+                    if product_search_event is not None:
+                        try:
+                            _ps_sel = product_search_event["selection"]
+                        except Exception:
+                            _ps_sel = getattr(product_search_event, "selection", None)
+                        if _ps_sel is not None:
+                            try:
+                                _ps_sel_rows = list(_ps_sel["rows"])
+                            except Exception:
+                                try:
+                                    _ps_sel_rows = list(_ps_sel.rows)
+                                except Exception:
+                                    _ps_sel_rows = []
+
+                    if _ps_sel_rows:
+                        _ps_row_idx = int(_ps_sel_rows[0])
+                        if 0 <= _ps_row_idx < len(product_search_view):
+                            _ps_selected_code = str(product_search_view.iloc[_ps_row_idx]["품목코드"])
+                            st.markdown("---")
+                            st.markdown(f"#### 선택 품목 거래처별 분석 — {_ps_selected_code}")
+                            st.caption("👥 거래처별 검색 탭과 동일한 표를, 선택한 품목 1개만 계산해 탭 이동 없이 바로 보여줍니다. (고속 모드 원칙 유지 · 리스트에서 다른 품목을 클릭하면 이 표만 교체됩니다)")
+
+                            _ps_src = q[q["품목코드"].astype(str) == _ps_selected_code].copy()
+                            _ps_cust_df = build_customer_history_table(_ps_src)
+
+                            if _ps_cust_df.empty:
+                                st.info("선택한 품목이 현재 사이드바 필터(품목코드·점착제코드) 결과에 포함되지 않습니다. 사이드바 필터를 조정하거나 '초기화' 후 다시 시도해 주세요.")
+                            else:
+                                _ps_n_cust = _ps_cust_df["거래처"].nunique() if "거래처" in _ps_cust_df.columns else 0
+                                if start_ts is not None and end_ts is not None:
+                                    _ps_period_txt = f"{start_ts.strftime('%Y-%m-%d')} ~ {end_ts.strftime('%Y-%m-%d')}"
+                                else:
+                                    _ps_period_txt = "적용된 필터 기간"
+                                st.caption(f"적용 기간: {_ps_period_txt} · 거래처 {_ps_n_cust}개 · {len(_ps_cust_df):,}행")
+
+                                clean_and_safe_display(
+                                    _ps_cust_df,
+                                    pinned_cols=["거래처", "품목코드"],
+                                    text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력", "최근날짜"],
+                                    height=calc_table_height(_ps_cust_df),
+                                    column_width_overrides={
+                                        "거래처": 170,
+                                        "품목코드": 145,
+                                        "점착제코드": 95,
+                                        "점착제명": 120,
+                                        "재단구분": 90,
+                                        "기준폭이력": 120,
+                                        "가로폭이력": 260,
+                                        "최근날짜": 95,
+                                        "최근단가": 70,
+                                        "출고횟수": 70,
+                                        "월평균_출고량": 95,
+                                        "월평균_매출": 95,
+                                        "총량_M2": 80,
+                                        "매출액": 105,
+                                        "가중평균단가": 95,
+                                    },
+                                )
 
 if active_main_tab == "🏷️ 견적 레퍼런스":
     if lazy_tabs_enabled and lazy_active_tab != "🏷️ 견적 레퍼런스":
@@ -6199,6 +6341,123 @@ if active_main_tab == "🔄 제품 대체 전환":
                             file_name="제품대체전환_매칭목록.csv",
                             mime="text/csv",
                         )
+
+                        # ── 신규: 매칭 원자료 보기 (원자료 탭 형식 — 협의 근거 자료) ──
+                        st.markdown("---")
+                        st.markdown("#### 🗂️ 매칭 원자료 보기 — 협의 근거 자료")
+                        st.caption(
+                            "매칭 목록에서 항목을 선택하면 해당 품목코드·거래처·가로폭과 정확히 일치하는 원자료 전체(내용 모두)를 "
+                            "원자료 탭과 동일한 컬럼·정렬(날짜 최신순)로 보여줍니다. 고객사 협의 시 출고 이력 근거로 바로 활용할 수 있습니다."
+                        )
+
+                        _sw_keys_all = _sw_rank_df[["품목코드", "거래처", "_w"]].drop_duplicates().rename(columns={"_w": "가로폭(mm)"})
+                        _sw_keys_all["품목코드"] = _sw_keys_all["품목코드"].astype(str)
+                        _sw_keys_all["거래처"] = _sw_keys_all["거래처"].astype(str)
+                        _sw_keys_all["가로폭(mm)"] = pd.to_numeric(_sw_keys_all["가로폭(mm)"], errors="coerce")
+                        _sw_keys_all = _sw_keys_all.dropna(subset=["가로폭(mm)"])
+
+                        _sw_q_tmp = _sw_q.copy()
+                        _sw_q_tmp["품목코드"] = _sw_q_tmp["품목코드"].astype(str)
+                        _sw_q_tmp["거래처"] = _sw_q_tmp["거래처"].astype(str)
+                        _sw_q_tmp["가로폭(mm)"] = pd.to_numeric(_sw_q_tmp["가로폭(mm)"], errors="coerce")
+
+                        _sw_raw_view_mode = st.radio(
+                            "보기 범위",
+                            ["선택 항목만", "전체 매칭 일괄 보기"],
+                            horizontal=True,
+                            key="sw_raw_view_mode",
+                        )
+
+                        if _sw_raw_view_mode == "선택 항목만":
+                            _sw_opt_labels = [
+                                f"{int(_r['순위'])}위 · {str(_r['품목코드'])} / {str(_r['거래처'])} / {float(_r['_w']):,.0f}mm"
+                                for _, _r in _sw_rank_df.iterrows()
+                            ]
+                            if "sw_raw_view_select" in st.session_state and st.session_state["sw_raw_view_select"] not in _sw_opt_labels:
+                                st.session_state["sw_raw_view_select"] = _sw_opt_labels[0]
+                            _sw_sel_label = st.selectbox("매칭 항목 선택", options=_sw_opt_labels, key="sw_raw_view_select")
+                            _sw_sel_row = _sw_rank_df.iloc[_sw_opt_labels.index(_sw_sel_label)]
+                            _sw_sel_code = str(_sw_sel_row["품목코드"])
+                            _sw_sel_cust = str(_sw_sel_row["거래처"])
+                            _sw_sel_width = float(_sw_sel_row["_w"])
+                            st.caption(f"선택 조합: {_sw_sel_code} / {_sw_sel_cust} / {_sw_sel_width:,.0f}mm")
+                            _sw_raw_matched = _sw_q_tmp[
+                                (_sw_q_tmp["품목코드"] == _sw_sel_code)
+                                & (_sw_q_tmp["거래처"] == _sw_sel_cust)
+                                & (_sw_q_tmp["가로폭(mm)"] == _sw_sel_width)
+                            ].copy()
+                        else:
+                            _sw_raw_matched = _sw_q_tmp.merge(
+                                _sw_keys_all,
+                                on=["품목코드", "거래처", "가로폭(mm)"],
+                                how="inner",
+                            )
+
+                        if _sw_raw_matched.empty:
+                            st.info("해당 조합의 원자료가 없습니다.")
+                        else:
+                            _sw_raw_priority_cols = [
+                                "날짜", "거래처", "담당부서", "영업담당부서", "담당자", "재단구분",
+                                "품목코드", "점착제코드", "점착제명", "기준폭", "가로폭(mm)", "길이(m)", "가로폭이력",
+                                "수량(M2)", "단가(원/M2)", "금액(원)", "최근날짜", "최근단가", "비고"
+                            ]
+                            _sw_raw_cols = [c for c in _sw_raw_priority_cols if c in _sw_raw_matched.columns and c != "품목명(공식)"]
+                            _sw_raw_cols += [c for c in _sw_raw_matched.columns if c not in _sw_raw_cols and c != "품목명(공식)"]
+
+                            _sw_raw_display = _sw_raw_matched[_sw_raw_cols].copy()
+                            if "날짜" in _sw_raw_display.columns:
+                                _sw_raw_display = _sw_raw_display.sort_values("날짜", ascending=False)
+
+                            _sw_raw_total = len(_sw_raw_display)
+                            _sw_raw_qty = pd.to_numeric(_sw_raw_display["수량(M2)"], errors="coerce").sum() if "수량(M2)" in _sw_raw_display.columns else 0.0
+                            _sw_raw_amt = pd.to_numeric(_sw_raw_display["금액(원)"], errors="coerce").sum() if "금액(원)" in _sw_raw_display.columns else 0.0
+                            _sw_raw_cap = 5000
+
+                            if _sw_raw_total > _sw_raw_cap:
+                                st.caption(f"속도 최적화를 위해 상위 {_sw_raw_cap:,}행만 표시합니다 (원자료 탭과 동일 규칙). 전체 {_sw_raw_total:,}행은 CSV로 내려받을 수 있습니다.")
+                            else:
+                                st.caption(f"매칭 원자료 {_sw_raw_total:,}행 · 총수량 {_sw_raw_qty:,.1f}㎡ · 총금액 {int(round(_sw_raw_amt)):,}원")
+
+                            _sw_raw_csv_cols = st.columns(2)
+                            with _sw_raw_csv_cols[0]:
+                                st.download_button(
+                                    "📥 매칭 원자료 CSV 다운로드",
+                                    data=_sw_raw_display.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                                    file_name="제품대체전환_매칭원자료.csv",
+                                    mime="text/csv",
+                                    key="download_sw_raw_csv",
+                                )
+
+                            if _sw_raw_total > _sw_raw_cap:
+                                _sw_raw_display = _sw_raw_display.head(_sw_raw_cap)
+
+                            clean_and_safe_display(
+                                _sw_raw_display,
+                                pinned_cols=["거래처", "품목코드"],
+                                text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "가로폭이력", "최근날짜", "월", "비고", "담당부서", "영업담당부서", "담당자"],
+                                height=calc_table_height(_sw_raw_display, min_rows=3, max_rows=18),
+                                column_width_overrides={
+                                    "날짜": 95,
+                                    "거래처": 120,
+                                    "담당부서": 110,
+                                    "영업담당부서": 120,
+                                    "담당자": 95,
+                                    "재단구분": 90,
+                                    "품목코드": 145,
+                                    "점착제코드": 95,
+                                    "점착제명": 120,
+                                    "기준폭": 90,
+                                    "가로폭(mm)": 90,
+                                    "길이(m)": 90,
+                                    "가로폭이력": 220,
+                                    "수량(M2)": 90,
+                                    "단가(원/M2)": 95,
+                                    "금액(원)": 95,
+                                    "최근날짜": 95,
+                                    "최근단가": 85,
+                                    "비고": 220,
+                                },
+                            )
 
                     _sw_excl_df = pd.DataFrame(_sw_excl_rows)
                     if not _sw_excl_df.empty:
