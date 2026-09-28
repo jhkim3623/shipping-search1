@@ -5248,8 +5248,26 @@ if active_main_tab == "🔎 품목 검색":
                     st.info("입력한 BOM 조건과 일치하는 품목이 없습니다.")
                 else:
                     recent_overview, _, _, _ = build_quote_reference(q_recent_search)
+                    # ── 기준폭이력 오른쪽에 표시할 제조원가Ⅰ 금액(BOM_제조원가 연동) 결합 ──
+                    #    값이 없으면 빈칸으로 두어(0원 아님) 오해하지 않도록 문자열로 포맷합니다.
+                    if (
+                        not recent_overview.empty
+                        and cost_lookup is not None
+                        and not cost_lookup.empty
+                        and "제조원가Ⅰ(㎡)" in cost_lookup.columns
+                    ):
+                        _ps_cost = cost_lookup[["품목코드", "제조원가Ⅰ(㎡)"]].copy()
+                        _ps_cost["품목코드"] = to_text_series(_ps_cost["품목코드"], strip=True)
+                        _ps_cost = _ps_cost.drop_duplicates(subset=["품목코드"], keep="first")
+                        recent_overview["품목코드"] = to_text_series(recent_overview["품목코드"], strip=True)
+                        recent_overview = recent_overview.merge(_ps_cost, on="품목코드", how="left")
+                    if "제조원가Ⅰ(㎡)" not in recent_overview.columns:
+                        recent_overview["제조원가Ⅰ(㎡)"] = np.nan
+                    recent_overview["제조원가Ⅰ"] = recent_overview["제조원가Ⅰ(㎡)"].apply(
+                        lambda v: _fmt_value(v, 1)
+                    )
                     overview_cols = [
-                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
+                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "제조원가Ⅰ", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
                         "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                     ]
                     overview_cols = [c for c in overview_cols if c in recent_overview.columns]
@@ -5275,12 +5293,13 @@ if active_main_tab == "🔎 품목 검색":
                         product_search_view,
                         height=product_search_table_height,
                         pinned_cols=["품목코드"],
-                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "일자(低)", "일자(高)"],
+                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "제조원가Ⅰ", "일자(低)", "일자(高)"],
                         column_width_overrides={
                             "품목코드": 165,
                             "점착제코드": 90,
                             "재단구분": 90,
                             "기준폭이력": 120,
+                            "제조원가Ⅰ": 88,
                             "일자(低)": 95,
                             "최저단가": 70,
                             "일자(高)": 95,
