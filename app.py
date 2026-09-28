@@ -2344,6 +2344,80 @@ def summarize_existing_bom_case(case_name, cost_row):
     }
 
 
+COST_CARD_COLUMNS = ["구분", "품목코드", "원지", "이형지", "점착제", "합지공정", "재단공정", "로스율", "운송판관비", "제조원가Ⅰ", "제조원가Ⅱ"]
+
+
+def build_product_cost_card_frame(product_code, cost_info):
+    """[견적 레퍼런스] 탭의 '원가 카드(BOM_제조원가 연동)' 표를 단일 품목용으로 생성합니다.
+    (BOM구성 / 원가(㎡) 2행 · 컬럼 구성은 견적 레퍼런스 탭과 동일)"""
+    blank_row = {c: "" for c in COST_CARD_COLUMNS}
+    blank_row["구분"] = "BOM구성"
+    blank_row["품목코드"] = str(product_code or "")
+    cost_blank_row = {c: "" for c in COST_CARD_COLUMNS}
+    cost_blank_row["구분"] = "원가(㎡)"
+
+    if cost_info is None or len(cost_info) == 0:
+        return pd.DataFrame([blank_row, cost_blank_row], columns=COST_CARD_COLUMNS)
+
+    def _get(key):
+        try:
+            return cost_info.get(key, np.nan)
+        except Exception:
+            return np.nan
+
+    _loss_rate = _get("로스율")
+    return pd.DataFrame([
+        {
+            **blank_row,
+            "원지": _get("원지"),
+            "이형지": _get("이형지"),
+            "점착제": _get("점착제"),
+            "합지공정": _get("합지공정"),
+            "재단공정": _get("재단공정"),
+            "로스율": _fmt_pct((float(_loss_rate) * 100.0) if pd.notna(_loss_rate) else np.nan),
+        },
+        {
+            **cost_blank_row,
+            "원지": _fmt_value(_get("원지원가"), 1),
+            "이형지": _fmt_value(_get("이형지원가"), 1),
+            "점착제": _fmt_value(_get("점착제원가"), 1),
+            "합지공정": _fmt_value(_get("합지원가"), 1),
+            "재단공정": _fmt_value(_get("재단원가"), 1),
+            "로스율": _fmt_value(_get("로스원가"), 1),
+            "운송판관비": _fmt_value(_get("운송판관비"), 1),
+            "제조원가Ⅰ": _fmt_value(_get("제조원가Ⅰ(㎡)"), 1),
+            "제조원가Ⅱ": _fmt_value(_get("제조원가Ⅱ(㎡)"), 1),
+        },
+    ], columns=COST_CARD_COLUMNS)
+
+
+def render_product_cost_card(product_code, cost_info, heading=None, caption=None):
+    """원가 카드(BOM_제조원가 연동) 표를 견적 레퍼런스 탭과 동일한 서식으로 렌더링합니다."""
+    if heading:
+        st.markdown(heading)
+    if caption:
+        st.caption(caption)
+    cost_display = build_product_cost_card_frame(product_code, cost_info)
+    render_compact_html_table(
+        cost_display,
+        height=calc_table_height(cost_display, min_rows=2, max_rows=2) + 18,
+        column_width_overrides={
+            "구분": 80,
+            "품목코드": 145,
+            "원지": 88,
+            "이형지": 88,
+            "점착제": 88,
+            "합지공정": 88,
+            "재단공정": 88,
+            "로스율": 84,
+            "운송판관비": 88,
+            "제조원가Ⅰ": 84,
+            "제조원가Ⅱ": 84,
+        },
+        center_cols=list(cost_display.columns),
+    )
+
+
 def summarize_custom_bom_case(case_name, selections, loss_rate_pct, transport_cost, raw_option_maps, lam_speed_override=None):
     def _lookup(kind, name, field):
         pool = raw_option_maps.get(kind, pd.DataFrame())
@@ -2949,6 +3023,28 @@ def build_quote_reference(q_ref):
         overview = overview.merge(base_width_history, on=overview_group_cols, how="left")
     else:
         overview["기준폭이력"] = ""
+
+    # ── 가로폭이력 (거래처별 검색 탭과 동일한 방식: 실제 출고된 가로폭 값을 콤마로 나열) ──
+    if "가로폭(mm)" in df.columns:
+        width_history_src = df[pd.to_numeric(df["가로폭(mm)"], errors="coerce").notna()]
+        width_history = build_group_history_frame(
+            width_history_src,
+            overview_group_cols,
+            "가로폭(mm)",
+            "가로폭이력",
+        )
+    else:
+        width_history = pd.DataFrame()
+    if not width_history.empty:
+        overview = overview.merge(width_history, on=overview_group_cols, how="left")
+    else:
+        overview["가로폭이력"] = ""
+    overview["가로폭이력"] = (
+        overview["가로폭이력"]
+        .fillna("")
+        .astype(str)
+        .replace(["nan", "NaN", "None", "<NA>", "NaT"], "")
+    )
 
     if not positive_unit_df.empty:
         overview_recent = (
@@ -5267,7 +5363,7 @@ if active_main_tab == "🔎 품목 검색":
                         lambda v: _fmt_value(v, 1)
                     )
                     overview_cols = [
-                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "제조원가Ⅰ", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
+                        "품목코드", "점착제코드", "재단구분", "기준폭이력", "가로폭이력", "제조원가Ⅰ", "최저단가최근날짜", "최저단가", "최고단가최근날짜", "최고단가", "거래처수",
                         "총출고횟수", "월평균_출고량", "월평균_매출", "총량_M2", "총매출액"
                     ]
                     overview_cols = [c for c in overview_cols if c in recent_overview.columns]
@@ -5293,12 +5389,13 @@ if active_main_tab == "🔎 품목 검색":
                         product_search_view,
                         height=product_search_table_height,
                         pinned_cols=["품목코드"],
-                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "제조원가Ⅰ", "일자(低)", "일자(高)"],
+                        text_cols=["품목코드", "점착제코드", "재단구분", "기준폭이력", "가로폭이력", "제조원가Ⅰ", "일자(低)", "일자(高)"],
                         column_width_overrides={
                             "품목코드": 165,
                             "점착제코드": 90,
                             "재단구분": 90,
                             "기준폭이력": 120,
+                            "가로폭이력": 260,
                             "제조원가Ⅰ": 88,
                             "일자(低)": 95,
                             "최저단가": 70,
@@ -5337,6 +5434,21 @@ if active_main_tab == "🔎 품목 검색":
                             st.markdown("---")
                             st.markdown(f"#### 선택 품목 거래처별 분석 — {_ps_selected_code}")
                             st.caption("👥 거래처별 검색 탭과 동일한 표를, 선택한 품목 1개만 계산해 탭 이동 없이 바로 보여줍니다. (고속 모드 원칙 유지 · 리스트에서 다른 품목을 클릭하면 이 표만 교체됩니다)")
+
+                            # ── 선택 품목 원가 카드 (BOM_제조원가 연동 · 견적 레퍼런스 탭과 동일 표) ──
+                            _ps_cost_row = (
+                                cost_lookup[cost_lookup["품목코드"].astype(str) == _ps_selected_code].copy()
+                                if (cost_lookup is not None and not cost_lookup.empty and "품목코드" in cost_lookup.columns)
+                                else pd.DataFrame()
+                            )
+                            _ps_cost_info = _ps_cost_row.iloc[0] if not _ps_cost_row.empty else pd.Series(dtype=object)
+                            render_product_cost_card(
+                                _ps_selected_code,
+                                _ps_cost_info,
+                                heading="##### 원가 카드 (BOM_제조원가 연동)",
+                                caption="선택한 품목코드의 제조원가 — [견적 레퍼런스] 탭의 원가 카드와 동일한 데이터를 표시합니다.",
+                            )
+                            st.markdown("###### 거래처별 출고 이력")
 
                             _ps_src = q[q["품목코드"].astype(str) == _ps_selected_code].copy()
                             _ps_cust_df = build_customer_history_table(_ps_src)
