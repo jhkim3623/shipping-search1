@@ -5273,7 +5273,7 @@ if active_main_tab == "🔎 품목 검색":
     if lazy_tabs_enabled and lazy_active_tab != "🔎 품목 검색":
         st.caption("고속 모드에서 이 탭은 선택 시 계산합니다.")
     else:
-            st.subheader("🔎 품목 검색 — 최근 6개월 데이터 기준")
+            st.subheader("🔎 품목 검색 — 시작일 ~ 종료일 데이터 기준")
 
             q_recent = q_quote_scope.copy()
             if dept_col and sel_dept:
@@ -5287,15 +5287,20 @@ if active_main_tab == "🔎 품목 검색":
             if sel_adh and "점착제코드" in q_recent.columns:
                 q_recent = q_recent[q_recent["점착제코드"].astype(str).isin(sel_adh)]
 
-            recent_end_dt = pd.to_datetime(edate) if edate is not None else pd.to_datetime(q_recent["날짜"].max(), errors="coerce")
-            recent_start_dt = None
-            if pd.notna(recent_end_dt):
-                recent_start_dt = recent_end_dt - pd.DateOffset(months=6)
-                if "날짜" in q_recent.columns:
-                    recent_dates = pd.to_datetime(q_recent["날짜"], errors="coerce")
-                    q_recent = q_recent[
-                        recent_dates.between(recent_start_dt, recent_end_dt, inclusive="both")
-                    ]
+            # ── 조회 기간: 고정 '최근 6개월' 대신 사이드바의 시작일/종료일을 그대로 사용 ──
+            period_start_dt = pd.to_datetime(start_ts, errors="coerce") if start_ts is not None else pd.NaT
+            period_end_dt = pd.to_datetime(end_ts, errors="coerce") if end_ts is not None else pd.NaT
+            if pd.isna(period_end_dt) and "날짜" in q_recent.columns:
+                period_end_dt = pd.to_datetime(q_recent["날짜"], errors="coerce").max()
+            if pd.isna(period_start_dt) and "날짜" in q_recent.columns:
+                period_start_dt = pd.to_datetime(q_recent["날짜"], errors="coerce").min()
+            if "날짜" in q_recent.columns and (pd.notna(period_start_dt) or pd.notna(period_end_dt)):
+                recent_dates = pd.to_datetime(q_recent["날짜"], errors="coerce")
+                _from_dt = period_start_dt if pd.notna(period_start_dt) else recent_dates.min()
+                _to_dt = period_end_dt if pd.notna(period_end_dt) else recent_dates.max()
+                q_recent = q_recent[
+                    recent_dates.between(pd.Timestamp(_from_dt), pd.Timestamp(_to_dt), inclusive="both")
+                ]
 
             if "단가(원/M2)" in q_recent.columns:
                 q_recent = q_recent[q_recent["단가(원/M2)"].notna() & (q_recent["단가(원/M2)"] > 0)]
@@ -5314,7 +5319,7 @@ if active_main_tab == "🔎 품목 검색":
             if not filters_ready:
                 st.info(filter_wait_message)
             elif q_recent.empty:
-                st.warning("최근 6개월 조건에 맞는 데이터가 없습니다.")
+                st.warning("시작일 ~ 종료일 조건에 맞는 데이터가 없습니다.")
             else:
                 bom_lookup = build_product_bom_lookup(tuple(sorted(q_recent["품목코드"].dropna().astype(str).unique().tolist())))
                 q_recent_search = q_recent.merge(bom_lookup, on="품목코드", how="left") if not bom_lookup.empty else q_recent.copy()
@@ -5336,9 +5341,9 @@ if active_main_tab == "🔎 품목 검색":
                         ]
 
                 period_label = "기간 정보 없음"
-                if pd.notna(recent_start_dt) and pd.notna(recent_end_dt):
-                    period_label = f"{recent_start_dt.strftime('%Y-%m-%d')} ~ {recent_end_dt.strftime('%Y-%m-%d')}"
-                st.caption(f"최근 6개월 기준 데이터 범위: {period_label} · 조회건수: {len(q_recent_search):,}건")
+                if pd.notna(period_start_dt) and pd.notna(period_end_dt):
+                    period_label = f"{pd.Timestamp(period_start_dt).strftime('%Y-%m-%d')} ~ {pd.Timestamp(period_end_dt).strftime('%Y-%m-%d')}"
+                st.caption(f"조회 기간(시작일 ~ 종료일): {period_label} · 조회건수: {len(q_recent_search):,}건")
 
                 if q_recent_search.empty:
                     st.info("입력한 BOM 조건과 일치하는 품목이 없습니다.")
