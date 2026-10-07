@@ -6402,6 +6402,10 @@ if active_main_tab == "🔄 제품 대체 전환":
                     )
                     _sw_rank_df = pd.DataFrame(_sw_rank_rows)
 
+                    # 안전장치: 접착제코드 컬럼이 어떤 경로로든 누락돼도 빈 값으로 생성해 KeyError 방지
+                    if "점착제코드" not in _sw_rank_df.columns:
+                        _sw_rank_df["점착제코드"] = ""
+
                     # ── 4-1) 접착제코드 필터 (기본값: 검색 결과 접착제코드 전체 선택) ──
                     _sw_adh_filter_applied = False
                     if not _sw_rank_df.empty and "점착제코드" in _sw_rank_df.columns:
