@@ -6126,9 +6126,21 @@ if active_main_tab == "🔄 제품 대체 전환":
                     _sw_w_lo = float(sw_width) - 20.0
                     _sw_w_hi = float(sw_width)
 
+                    # 기준 품목의 접착제코드 (조건 배지·필터 안내에 표시)
+                    _sw_base_adh_set = set()
+                    if "점착제코드" in _sw_scope.columns:
+                        for _v in _sw_scope.loc[_sw_scope["품목코드"].astype(str) == str(base_code), "점착제코드"].tolist():
+                            if pd.isna(_v):
+                                continue
+                            _sv = str(_v).strip()
+                            if _sv:
+                                _sw_base_adh_set.add(_sv)
+                    _sw_base_adh_txt = ", ".join(sorted(_sw_base_adh_set))
+                    _sw_chip1_adh = f' · 접착제 {_html.escape(_sw_base_adh_txt)}' if _sw_base_adh_txt else ""
+
                     st.markdown(
                         '<div class="sw-condrow">'
-                        f'<span class="sw-cond hl"><span class="sw-n">1</span>동일 품목({_html.escape(base_code)}) 사용 업체 — 최우선 추천</span>'
+                        f'<span class="sw-cond hl"><span class="sw-n">1</span>동일 품목({_html.escape(base_code)}){_sw_chip1_adh} 사용 업체 — 최우선 추천</span>'
                         f'<span class="sw-cond"><span class="sw-n">2</span>폭 대체: 보유 폭 {sw_width:,.0f}mm → {_sw_w_lo:,.0f}~{_sw_w_hi:,.0f}mm 사용 업체 적용 가능 (−20mm 허용)</span>'
                         f'<span class="sw-cond"><span class="sw-n">3</span>점착제 대체: {_html.escape(_sw_family)}/* 사용 업체 대체품 적용 가능</span>'
                         '</div>',
@@ -6362,11 +6374,14 @@ if active_main_tab == "🔄 제품 대체 전환":
                         _tier1 = _is_same and abs(_w_val - _sw_w_hi) < 1e-6
                         _d_rate = (float(_last_price) - _sw_promo) / float(_last_price) * 100.0
                         _profit = (float(_last_price) - _sw_promo) * _sw_total_sqm
+                        _adh_raw = r.get("점착제코드", "")
+                        _adh_val = "" if pd.isna(_adh_raw) else str(_adh_raw).strip()
                         _sw_rank_rows.append(
                             {
                                 "_tier1": _tier1,
                                 "_w": _w_val,
                                 "품목코드": _code,
+                                "점착제코드": _adh_val,
                                 "거래처": _cust,
                                 "_is_same": _is_same,
                                 "재단구분": _cut,
@@ -6387,6 +6402,48 @@ if active_main_tab == "🔄 제품 대체 전환":
                     )
                     _sw_rank_df = pd.DataFrame(_sw_rank_rows)
 
+                    # ── 4-1) 접착제코드 필터 (기본값: 검색 결과 접착제코드 전체 선택) ──
+                    _sw_adh_filter_applied = False
+                    if not _sw_rank_df.empty and "점착제코드" in _sw_rank_df.columns:
+                        _sw_adh_vals = _sw_rank_df["점착제코드"].astype(str).str.strip().replace("", "(미지정)")
+                        _sw_rank_df["점착제코드"] = _sw_adh_vals
+                        _sw_adh_unassigned = "(미지정)" in set(_sw_adh_vals.unique().tolist())
+                        _sw_adh_options = sorted(set(_sw_adh_vals.unique().tolist()) - {"(미지정)"})
+                        if _sw_adh_unassigned:
+                            _sw_adh_options.append("(미지정)")
+                        _sw_adh_sig = "||".join(_sw_adh_options)
+
+                        def _sw_adh_select_all_cb():
+                            _opts = st.session_state.get("sw_adh_opts_list") or []
+                            st.session_state["sw_adh_filter"] = list(_opts)
+
+                        if st.session_state.get("sw_adh_opts_sig") != _sw_adh_sig:
+                            st.session_state["sw_adh_opts_sig"] = _sw_adh_sig
+                            st.session_state["sw_adh_filter"] = list(_sw_adh_options)
+                        st.session_state["sw_adh_opts_list"] = list(_sw_adh_options)
+
+                        _sw_adh_ui, _sw_adh_btn = st.columns([4, 1.4])
+                        with _sw_adh_ui:
+                            _sw_adh_selected = st.multiselect(
+                                "접착제코드 필터 (기본값: 전체 선택)",
+                                options=_sw_adh_options,
+                                key="sw_adh_filter",
+                            )
+                        with _sw_adh_btn:
+                            st.markdown('<div class="sw-lbl">&nbsp;</div>', unsafe_allow_html=True)
+                            st.button(
+                                "🔄 전체 선택",
+                                key="sw_adh_select_all_btn",
+                                on_click=_sw_adh_select_all_cb,
+                            )
+                        st.caption(
+                            "💡 기본값은 검색 결과에 포함된 접착제코드 전체 선택입니다. 호환되지 않는(대체 불가) 점착제코드를 선택 해제하면 "
+                            "해당 접착제를 사용한 제품이 아래 목록·순위·CSV·매칭 원자료에서 모두 제외됩니다. 품목코드나 폭을 바꿔 검색 목록이 바뀌면 전체 선택으로 초기화됩니다."
+                        )
+                        _sw_adh_filter_applied = True
+                        if len(_sw_adh_selected) < len(_sw_adh_options):
+                            _sw_rank_df = _sw_rank_df[_sw_rank_df["접착제코드"].isin(_sw_adh_selected)].copy()
+
                     def _sw_render_html_table(header_cells, body_rows, height):
                         _thead = "".join(f'<th style="position:sticky;top:0;z-index:2;background:#f8fafc;color:#111827;border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;white-space:normal;width:{w}px;min-width:{w}px;">{_html.escape(h).replace("&lt;br&gt;", "<br>")}</th>' for h, w in header_cells)
                         _tbody = "".join(f'<tr style="background:{bg};">{"".join(cells)}</tr>' for bg, cells in body_rows)
@@ -6399,7 +6456,10 @@ if active_main_tab == "🔄 제품 대체 전환":
                         )
 
                     if _sw_rank_df.empty:
-                        st.info("매칭 가능한 거래처가 없습니다. 보유 폭이나 기준 품목을 바꿔 보세요.")
+                        if _sw_adh_filter_applied:
+                            st.info("선택된 접착제코드가 없어 표시할 제품이 없습니다. 위 '접착제코드 필터'에서 점착제코드를 다시 선택하거나 '전체 선택'을 눌러 주세요.")
+                        else:
+                            st.info("매칭 가능한 거래처가 없습니다. 보유 폭이나 기준 품목을 바꿔 보세요.")
                     else:
                         _sw_rank_df = _sw_rank_df.sort_values(
                             ["_tier1", "출고횟수", "_avg_qty", "_profit"],
@@ -6436,6 +6496,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                             {
                                 "순위": pd.to_numeric(_sw_rank_df["순위"], errors="coerce"),
                                 "품목코드": _sw_rank_df["품목코드"].astype(str),
+                                "접착제코드": _sw_rank_df["접착제코드"].astype(str),
                                 "거래처": _sw_rank_df["거래처"].astype(str),
                                 "매칭": np.where(_sw_rank_df["_is_same"].astype(bool), "동일품목", "점착제 대체"),
                                 "재단구분": _sw_rank_df["재단구분"].astype(str),
@@ -6454,11 +6515,12 @@ if active_main_tab == "🔄 제품 대체 전환":
                         _sw_match_event = clean_and_safe_display(
                             _sw_match_display,
                             height=calc_table_height(_sw_match_display, min_rows=3, max_rows=18),
-                            pinned_cols=["순위", "품목코드", "거래처"],
-                            text_cols=["품목코드", "거래처", "매칭", "재단구분", "최근날짜"],
+                            pinned_cols=["순위", "품목코드", "접착제코드", "거래처"],
+                            text_cols=["품목코드", "접착제코드", "거래처", "매칭", "재단구분", "최근날짜"],
                             column_width_overrides={
                                 "순위": 55,
                                 "품목코드": 150,
+                                "접착제코드": 95,
                                 "거래처": 150,
                                 "매칭": 92,
                                 "재단구분": 88,
@@ -6476,8 +6538,8 @@ if active_main_tab == "🔄 제품 대체 전환":
                         )
                         st.caption("위 목록에서 행을 클릭하면 하단 '매칭 원자료 보기'가 자동으로 갱신됩니다. (품목검색 탭과 동일한 선택 방식 · 정렬 규칙은 기존과 동일)")
 
-                        _sw_csv_df = _sw_rank_df[["순위", "품목코드", "거래처", "_is_same", "재단구분", "_w", "출고횟수", "_date", "_price", "_avg_qty", "_d_rate", "_profit"]].copy()
-                        _sw_csv_df.columns = ["순위", "품목코드", "거래처", "매칭", "재단구분", "가로폭(mm)", "출고횟수", "최근날짜", "최근단가", "월평균_출고량", "할인률(%)", "업체 이익(원)"]
+                        _sw_csv_df = _sw_rank_df[["순위", "품목코드", "접착제코드", "거래처", "_is_same", "재단구분", "_w", "출고횟수", "_date", "_price", "_avg_qty", "_d_rate", "_profit"]].copy()
+                        _sw_csv_df.columns = ["순위", "품목코드", "접착제코드", "거래처", "매칭", "재단구분", "가로폭(mm)", "출고횟수", "최근날짜", "최근단가", "월평균_출고량", "할인률(%)", "업체 이익(원)"]
                         _sw_csv_df["매칭"] = _sw_csv_df["매칭"].map(lambda v: "동일품목" if bool(v) else "점착제 대체")
                         _sw_csv_df["할인률(%)"] = _sw_csv_df["할인률(%)"].map(lambda v: f"{v:,.1f}")
                         _sw_csv = _sw_csv_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
