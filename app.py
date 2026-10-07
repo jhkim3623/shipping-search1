@@ -6282,7 +6282,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                     _sw_promo = float(sw_promo)
                     _sw_margin = _sw_promo - _sw_cost2 if pd.notna(_sw_cost2) else np.nan
                     _sw_margin_rate = (_sw_margin / _sw_cost2 * 100.0) if (pd.notna(_sw_cost2) and _sw_cost2) else np.nan
-                    _sw_loss = (_sw_cost2 - _sw_promo) * _sw_total_sqm if pd.notna(_sw_cost2) else np.nan
+                    _sw_loss = (_sw_promo - _sw_cost2) * _sw_total_sqm if pd.notna(_sw_cost2) else np.nan
 
                     def _sw_kpi_html(k, v, cls="", d=""):
                         _d = f'<div class="sw-d" style="font-size:11px;color:#8b95a5;margin-top:2px;">{d}</div>' if d else ""
@@ -6295,7 +6295,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                         + _sw_kpi_html("제조원가Ⅱ 대비 마진", _sw_margin_txt, "pos" if (pd.notna(_sw_margin) and _sw_margin >= 0) else "neg", _sw_margin_d)
                         + _sw_kpi_html("롤당 판매가 환산", f"{_sw_promo * _sw_sqm_per_roll:,.0f}원", "", f"{_sw_sqm_per_roll:,.1f}㎡/롤 기준")
                         + _sw_kpi_html(f"{int(sw_qty)}롤 총 예상 매출", f"{_sw_promo * _sw_total_sqm:,.0f}원", "", (f"총 제조원가 약 {_sw_cost2_total_txt} 대비" if pd.notna(_sw_cost2) else ""))
-                        + _sw_kpi_html("제조원가Ⅱ 기준 손실액", (f"{_sw_loss:,.0f}원" if _sw_loss > 0 else f"{_sw_loss:,.0f}원" if pd.notna(_sw_loss) else "—"), ("neg" if (pd.notna(_sw_loss) and _sw_loss > 0) else "pos"), f"(원가Ⅱ {_sw_cost2:,.1f} − 판매가 {_sw_promo:,.0f}) × 총 {_sw_total_sqm:,.0f}㎡" if pd.notna(_sw_cost2) else "")
+                        + _sw_kpi_html("제조원가Ⅱ 기준 손실액", (f"{_sw_loss:,.0f}원" if pd.notna(_sw_loss) else "—"), ("neg" if (pd.notna(_sw_loss) and _sw_loss < 0) else "pos"), f"(판매가 {_sw_promo:,.0f} − 원가Ⅱ {_sw_cost2:,.1f}) × 총 {_sw_total_sqm:,.0f}㎡" if pd.notna(_sw_cost2) else "")
                         + '</div>',
                         unsafe_allow_html=True,
                     )
@@ -6329,6 +6329,22 @@ if active_main_tab == "🔄 제품 대체 전환":
                     )
                     _sw_g = _sw_g.merge(_sw_latest, on=_sw_key_cols, how="left")
                     _sw_g["월평균_출고량"] = np.where(_sw_g["개월수"] > 0, _sw_g["총량_M2"] / _sw_g["개월수"], np.nan)
+
+                    # 영업담당자: 매칭 단위(거래처·품목·폭)별 가장 최근 출고건의 담당자
+                    _sw_mgr_src = "담당자" if "담당자" in _sw_q.columns else None
+                    if _sw_mgr_src:
+                        _sw_mgr_tmp = _sw_q[_sw_key_cols + [_sw_mgr_src]].copy()
+                        _sw_mgr_tmp["_dt"] = pd.to_datetime(_sw_q["날짜"], errors="coerce") if "날짜" in _sw_q.columns else pd.NaT
+                        _sw_mgr_tmp[_sw_mgr_src] = _sw_mgr_tmp[_sw_mgr_src].fillna("").astype(str).str.strip().replace(["nan", "None"], "")
+                        _sw_mgr_tmp = _sw_mgr_tmp[_sw_mgr_tmp[_sw_mgr_src] != ""]
+                        _sw_mgr_map = (
+                            _sw_mgr_tmp.sort_values("_dt", kind="mergesort")
+                            .groupby(_sw_key_cols, dropna=False).tail(1)[_sw_key_cols + [_sw_mgr_src]]
+                            .rename(columns={_sw_mgr_src: "_sw_mgr"})
+                        )
+                        _sw_g = _sw_g.merge(_sw_mgr_map, on=_sw_key_cols, how="left")
+                    if "_sw_mgr" not in _sw_g.columns:
+                        _sw_g["_sw_mgr"] = ""
 
                     def _sw_disc_html(d):
                         if d >= 15:
@@ -6391,6 +6407,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                                 "_d_rate": _d_rate,
                                 "_avg_qty": float(r.get("월평균_출고량", 0.0) or 0.0),
                                 "_profit": _profit,
+                                "_mgr": "" if pd.isna(r.get("_sw_mgr", "")) else str(r.get("_sw_mgr", "") or ""),
                             }
                         )
 
@@ -6513,6 +6530,8 @@ if active_main_tab == "🔄 제품 대체 전환":
                                 "할인률(%)": pd.to_numeric(_sw_rank_df["_d_rate"], errors="coerce"),
                                 "월평균_출고량": pd.to_numeric(_sw_rank_df["_avg_qty"], errors="coerce"),
                                 "업체이익(원)": pd.to_numeric(_sw_rank_df["_profit"], errors="coerce"),
+                                "업체 단가 인하율(%)": ((pd.to_numeric(_sw_rank_df["_price"], errors="coerce") - float(_sw_promo)) / pd.to_numeric(_sw_rank_df["_price"], errors="coerce") * 100.0).round(1),
+                                "영업담당자": (_sw_rank_df["_mgr"] if "_mgr" in _sw_rank_df.columns else pd.Series("", index=_sw_rank_df.index)).astype(str),
                             }
                         )
                         # 기존 탭들과 동일한 표준 표 + 행 선택 지원(품목검색 탭과 같은 방식)
@@ -6520,7 +6539,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                             _sw_match_display,
                             height=calc_table_height(_sw_match_display, min_rows=3, max_rows=18),
                             pinned_cols=["순위", "품목코드", "접착제코드", "거래처"],
-                            text_cols=["품목코드", "접착제코드", "거래처", "매칭", "재단구분", "최근날짜"],
+                            text_cols=["품목코드", "접착제코드", "거래처", "매칭", "재단구분", "최근날짜", "영업담당자"],
                             column_width_overrides={
                                 "순위": 55,
                                 "품목코드": 150,
@@ -6537,6 +6556,8 @@ if active_main_tab == "🔄 제품 대체 전환":
                                 "할인률(%)": 85,
                                 "월평균_출고량": 105,
                                 "업체이익(원)": 120,
+                                "업체 단가 인하율(%)": 120,
+                                "영업담당자": 95,
                             },
                             selection_key="sw_match_row_select",
                         )
@@ -6547,6 +6568,8 @@ if active_main_tab == "🔄 제품 대체 전환":
                             _sw_rank_df["점착제코드"] = ""
                         _sw_csv_df = _sw_rank_df[["순위", "품목코드", "점착제코드", "거래처", "_is_same", "재단구분", "_w", "출고횟수", "_date", "_price", "_avg_qty", "_d_rate", "_profit"]].copy()
                         _sw_csv_df.columns = ["순위", "품목코드", "접착제코드", "거래처", "매칭", "재단구분", "가로폭(mm)", "출고횟수", "최근날짜", "최근단가", "월평균_출고량", "할인률(%)", "업체 이익(원)"]
+                        _sw_csv_df["업체 단가 인하율(%)"] = ((pd.to_numeric(_sw_rank_df["_price"], errors="coerce") - float(_sw_promo)) / pd.to_numeric(_sw_rank_df["_price"], errors="coerce") * 100.0).round(1).values
+                        _sw_csv_df["영업담당자"] = (_sw_rank_df["_mgr"] if "_mgr" in _sw_rank_df.columns else pd.Series("", index=_sw_rank_df.index)).astype(str).values
                         _sw_csv_df["매칭"] = _sw_csv_df["매칭"].map(lambda v: "동일품목" if bool(v) else "점착제 대체")
                         _sw_csv_df["할인률(%)"] = _sw_csv_df["할인률(%)"].map(lambda v: f"{v:,.1f}")
                         _sw_csv = _sw_csv_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
