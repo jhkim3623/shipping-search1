@@ -6446,7 +6446,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                         )
                         _sw_adh_filter_applied = True
                         if len(_sw_adh_selected) < len(_sw_adh_options) and "점착제코드" in _sw_rank_df.columns:
-                            _sw_rank_df = _sw_rank_df[_sw_rank_df["접착제코드"].isin(_sw_adh_selected)].copy()
+                            _sw_rank_df = _sw_rank_df[_sw_rank_df["점착제코드"].astype(str).isin([str(x) for x in _sw_adh_selected])].copy()
 
                     def _sw_render_html_table(header_cells, body_rows, height):
                         _thead = "".join(f'<th style="position:sticky;top:0;z-index:2;background:#f8fafc;color:#111827;border-bottom:1px solid #e5e7eb;padding:8px 10px;text-align:center;white-space:normal;width:{w}px;min-width:{w}px;">{_html.escape(h).replace("&lt;br&gt;", "<br>")}</th>' for h, w in header_cells)
@@ -6545,7 +6545,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                         # 안전장치 2: CSV 생성 전에도 접착제코드 컬럼 존재 보장
                         if "점착제코드" not in _sw_rank_df.columns:
                             _sw_rank_df["점착제코드"] = ""
-                        _sw_csv_df = _sw_rank_df[["순위", "품목코드", "접착제코드", "거래처", "_is_same", "재단구분", "_w", "출고횟수", "_date", "_price", "_avg_qty", "_d_rate", "_profit"]].copy()
+                        _sw_csv_df = _sw_rank_df[["순위", "품목코드", "점착제코드", "거래처", "_is_same", "재단구분", "_w", "출고횟수", "_date", "_price", "_avg_qty", "_d_rate", "_profit"]].copy()
                         _sw_csv_df.columns = ["순위", "품목코드", "접착제코드", "거래처", "매칭", "재단구분", "가로폭(mm)", "출고횟수", "최근날짜", "최근단가", "월평균_출고량", "할인률(%)", "업체 이익(원)"]
                         _sw_csv_df["매칭"] = _sw_csv_df["매칭"].map(lambda v: "동일품목" if bool(v) else "점착제 대체")
                         _sw_csv_df["할인률(%)"] = _sw_csv_df["할인률(%)"].map(lambda v: f"{v:,.1f}")
