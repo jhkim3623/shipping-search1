@@ -6445,7 +6445,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                             "해당 접착제를 사용한 제품이 아래 목록·순위·CSV·매칭 원자료에서 모두 제외됩니다. 품목코드나 폭을 바꿔 검색 목록이 바뀌면 전체 선택으로 초기화됩니다."
                         )
                         _sw_adh_filter_applied = True
-                        if len(_sw_adh_selected) < len(_sw_adh_options):
+                        if len(_sw_adh_selected) < len(_sw_adh_options) and "점착제코드" in _sw_rank_df.columns:
                             _sw_rank_df = _sw_rank_df[_sw_rank_df["접착제코드"].isin(_sw_adh_selected)].copy()
 
                     def _sw_render_html_table(header_cells, body_rows, height):
