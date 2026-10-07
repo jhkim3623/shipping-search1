@@ -6500,7 +6500,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                             {
                                 "순위": pd.to_numeric(_sw_rank_df["순위"], errors="coerce"),
                                 "품목코드": _sw_rank_df["품목코드"].astype(str),
-                                "접착제코드": _sw_rank_df["접착제코드"].astype(str),
+                                "접착제코드": (_sw_rank_df["점착제코드"] if "점착제코드" in _sw_rank_df.columns else pd.Series("", index=_sw_rank_df.index)).astype(str),
                                 "거래처": _sw_rank_df["거래처"].astype(str),
                                 "매칭": np.where(_sw_rank_df["_is_same"].astype(bool), "동일품목", "점착제 대체"),
                                 "재단구분": _sw_rank_df["재단구분"].astype(str),
@@ -6542,6 +6542,9 @@ if active_main_tab == "🔄 제품 대체 전환":
                         )
                         st.caption("위 목록에서 행을 클릭하면 하단 '매칭 원자료 보기'가 자동으로 갱신됩니다. (품목검색 탭과 동일한 선택 방식 · 정렬 규칙은 기존과 동일)")
 
+                        # 안전장치 2: CSV 생성 전에도 접착제코드 컬럼 존재 보장
+                        if "점착제코드" not in _sw_rank_df.columns:
+                            _sw_rank_df["점착제코드"] = ""
                         _sw_csv_df = _sw_rank_df[["순위", "품목코드", "접착제코드", "거래처", "_is_same", "재단구분", "_w", "출고횟수", "_date", "_price", "_avg_qty", "_d_rate", "_profit"]].copy()
                         _sw_csv_df.columns = ["순위", "품목코드", "접착제코드", "거래처", "매칭", "재단구분", "가로폭(mm)", "출고횟수", "최근날짜", "최근단가", "월평균_출고량", "할인률(%)", "업체 이익(원)"]
                         _sw_csv_df["매칭"] = _sw_csv_df["매칭"].map(lambda v: "동일품목" if bool(v) else "점착제 대체")
