@@ -6413,7 +6413,7 @@ if active_main_tab == "🔄 제품 대체 전환":
 
                     _sw_h2(4, "판매가능한 업체와 품목")
                     st.caption(
-                        "순위 규칙 — ① 동일품목·동일사이즈 최상위 ② 출고횟수·출고수량(월평균_출고량) 높은 순 ③ 업체 이익 큰 순"
+                        "순위 규칙 — ① 월평균_출고량 높은 순 ② 출고횟수 많은 순 ③ 할인률(%) 높은 순"
                         f" · 폭 허용 구간 {_sw_w_lo:,.0f}~{_sw_w_hi:,.0f}mm (보유 폭 −20mm) · 출고횟수는 해당 가로폭의 출고 건수로 카운트"
                         " · 업체 이익 = (최근단가 − 프로모션 판매가) × 총수량(㎡)"
                     )
@@ -6483,8 +6483,8 @@ if active_main_tab == "🔄 제품 대체 전환":
                             st.info("매칭 가능한 거래처가 없습니다. 보유 폭이나 기준 품목을 바꿔 보세요.")
                     else:
                         _sw_rank_df = _sw_rank_df.sort_values(
-                            ["_tier1", "출고횟수", "_avg_qty", "_profit"],
-                            ascending=[False, False, False, False],
+                            ["_avg_qty", "출고횟수", "_d_rate"],
+                            ascending=[False, False, False],
                             kind="mergesort",
                         ).reset_index(drop=True)
                         _sw_rank_df.insert(0, "순위", range(1, len(_sw_rank_df) + 1))
@@ -6507,7 +6507,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                         st.markdown(
                             '<div class="sw-headrow">'
                             f'<span class="sw-chip">매칭 거래처 {_sw_n_cust}개 · 품목 {len(_sw_rank_df)}건</span>'
-                            '<span class="sw-chip gray">정렬: 동일품목·동일사이즈 → 출고횟수·출고수량 → 업체이익</span>'
+                            '<span class="sw-chip gray">정렬: 월평균_출고량 ↓ → 출고횟수 ↓ → 할인률 ↓</span>'
                             + _sw_top3_html
                             + '</div>',
                             unsafe_allow_html=True,
