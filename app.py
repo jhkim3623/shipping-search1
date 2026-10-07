@@ -674,7 +674,7 @@ def clean_and_safe_display(
             if manual_width is not None:
                 num_width = manual_width
 
-            if any(k in col for k in ["하락률", "증감률", "증가율", "이익률", "비율", "변화율", "할인률", "CV", "반품율"]):
+            if any(k in col for k in ["하락률", "증감률", "증가율", "이익률", "비율", "변화율", "할인률", "인하률", "인하율", "CV", "반품율"]):
                 column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
             elif any(k in col for k in ["M2", "수량", "판매량", "총량", "출고량"]):
                 column_config[col] = st.column_config.NumberColumn(col, format="%,.1f", pinned=pinned, width=num_width)
@@ -6530,7 +6530,6 @@ if active_main_tab == "🔄 제품 대체 전환":
                                 "할인률(%)": pd.to_numeric(_sw_rank_df["_d_rate"], errors="coerce"),
                                 "월평균_출고량": pd.to_numeric(_sw_rank_df["_avg_qty"], errors="coerce"),
                                 "업체이익(원)": pd.to_numeric(_sw_rank_df["_profit"], errors="coerce"),
-                                "업체 단가 인하율(%)": ((pd.to_numeric(_sw_rank_df["_price"], errors="coerce") - float(_sw_promo)) / pd.to_numeric(_sw_rank_df["_price"], errors="coerce") * 100.0).round(1),
                                 "영업담당자": (_sw_rank_df["_mgr"] if "_mgr" in _sw_rank_df.columns else pd.Series("", index=_sw_rank_df.index)).astype(str),
                             }
                         )
@@ -6556,8 +6555,7 @@ if active_main_tab == "🔄 제품 대체 전환":
                                 "할인률(%)": 85,
                                 "월평균_출고량": 105,
                                 "업체이익(원)": 120,
-                                "업체 단가 인하율(%)": 120,
-                                "영업담당자": 95,
+                                "영업담당자": 115,
                             },
                             selection_key="sw_match_row_select",
                         )
@@ -6568,7 +6566,6 @@ if active_main_tab == "🔄 제품 대체 전환":
                             _sw_rank_df["점착제코드"] = ""
                         _sw_csv_df = _sw_rank_df[["순위", "품목코드", "점착제코드", "거래처", "_is_same", "재단구분", "_w", "출고횟수", "_date", "_price", "_avg_qty", "_d_rate", "_profit"]].copy()
                         _sw_csv_df.columns = ["순위", "품목코드", "접착제코드", "거래처", "매칭", "재단구분", "가로폭(mm)", "출고횟수", "최근날짜", "최근단가", "월평균_출고량", "할인률(%)", "업체 이익(원)"]
-                        _sw_csv_df["업체 단가 인하율(%)"] = ((pd.to_numeric(_sw_rank_df["_price"], errors="coerce") - float(_sw_promo)) / pd.to_numeric(_sw_rank_df["_price"], errors="coerce") * 100.0).round(1).values
                         _sw_csv_df["영업담당자"] = (_sw_rank_df["_mgr"] if "_mgr" in _sw_rank_df.columns else pd.Series("", index=_sw_rank_df.index)).astype(str).values
                         _sw_csv_df["매칭"] = _sw_csv_df["매칭"].map(lambda v: "동일품목" if bool(v) else "점착제 대체")
                         _sw_csv_df["할인률(%)"] = _sw_csv_df["할인률(%)"].map(lambda v: f"{v:,.1f}")
