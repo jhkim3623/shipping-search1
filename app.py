@@ -1956,6 +1956,53 @@ def infer_customer_growth_reason(row):
     return " | ".join(comments[:5])
 
 
+def build_latest_manager_map(df, on_cols=("품목코드", "거래처"), manager_col="담당자"):
+    """on_cols 키 조합별로 가장 최근 날짜 레코드의 담당자를 담은 DataFrame을 반환합니다."""
+    _cols = list(on_cols)
+    if df is None or df.empty or manager_col not in df.columns or not set(_cols) <= set(df.columns):
+        return pd.DataFrame(columns=_cols + ["담당자"])
+    t = df[_cols + [manager_col, "날짜"]].copy()
+    t["날짜"] = pd.to_datetime(t["날짜"], errors="coerce")
+    for c in _cols:
+        t[c] = t[c].astype(str).str.strip()
+    t[manager_col] = t[manager_col].fillna("").astype(str).str.strip()
+    t[manager_col] = t[manager_col].replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "NaN": pd.NA})
+    t = t.dropna(subset=[manager_col])
+    if t.empty:
+        return pd.DataFrame(columns=_cols + ["담당자"])
+    t = t.sort_values("날짜", kind="mergesort").groupby(_cols, dropna=False).tail(1)
+    return t[_cols + [manager_col]].rename(columns={manager_col: "담당자"})
+
+
+def build_item_increase_rate_map(item_status):
+    """품목현황 시트의 품목명별 인상률(%) 맵을 반환합니다. 10% 표기(0.1)와 '10%' 문자열 모두 지원."""
+    if item_status is None or item_status.empty or "품목명" not in item_status.columns or "인상률" not in item_status.columns:
+        return {}
+    out = {}
+    for _, r in item_status[["품목명", "인상률"]].iterrows():
+        key = str(r["품목명"]).strip()
+        if not key or key.lower() in ("nan", "none"):
+            continue
+        v = r["인상률"]
+        if isinstance(v, str):
+            t = v.strip().replace("%", "")
+            try:
+                val = float(t)
+            except ValueError:
+                continue
+        else:
+            try:
+                val = float(v)
+            except (TypeError, ValueError):
+                continue
+        if pd.isna(val):
+            continue
+        if 0.0 < abs(val) <= 1.5:  # 백분율 서식(0.1 = 10%) 자동 판별
+            val = val * 100.0
+        out.setdefault(key, round(float(val), 2))
+    return out
+
+
 @st.cache_data(show_spinner=False, max_entries=CACHE_DATA_LARGE_MAX_ENTRIES)
 def load_excel(file_bytes):
     xls = pd.ExcelFile(BytesIO(file_bytes), engine="openpyxl")
@@ -1976,6 +2023,7 @@ def load_excel(file_bytes):
     cust = read_sheet("거래처마스터", required=False)
     bom = read_sheet("BOM_제조원가", required=False)
     raw_cost = read_sheet("원자재_원가", required=False)
+    item_status = read_sheet("품목현황", required=False)
 
     if rec.empty:
         st.error("출고기록 시트가 비어있습니다.")
@@ -2138,7 +2186,7 @@ def load_excel(file_bytes):
     bom = optimize_dataframe_memory(bom)
     raw_cost = optimize_dataframe_memory(raw_cost)
 
-    return rec, alias, prod, adh, cust, bom, raw_cost
+    return rec, alias, prod, adh, cust, bom, raw_cost, item_status
 
 
 
@@ -4783,8 +4831,9 @@ else:
     st.error("기본 데이터 파일(data.xlsx)을 찾을 수 없습니다. 사이드바에서 파일을 업로드해 주세요.")
     st.stop()
 
-rec, alias, prod, adh, cust, bom, raw_cost = load_excel(file_bytes)
+rec, alias, prod, adh, cust, bom, raw_cost, item_status = load_excel(file_bytes)
 cost_lookup = build_cost_lookup(bom, raw_cost)
+item_rate_map = build_item_increase_rate_map(item_status)
 gc.collect()  # [최적화] 엑셀 파싱/머지 직후 임시 객체 즉시 회수
 
 st.sidebar.markdown('<div class="sidebar-filter-title">검색 필터</div>', unsafe_allow_html=True)
@@ -5170,10 +5219,18 @@ if active_main_tab == "👥 거래처별 검색":
 
                 g["가중평균단가"] = np.where(g["총량_M2"] > 0, (g["매출액"] / g["총량_M2"]).round(0), 0)
 
+                # 마지막 컬럼: 가중평균단가 대신 담당자 (해당 거래처·품목·점착제의 가장 최근 출고 담당자)
+                _mgr_map_cust = build_latest_manager_map(q1, on_cols=tuple(key_cols))
+                if not _mgr_map_cust.empty:
+                    g = g.drop(columns=["담당자"], errors="ignore").merge(_mgr_map_cust, on=key_cols, how="left")
+                else:
+                    g["담당자"] = ""
+                g["담당자"] = g["담당자"].fillna("")
+
                 ordered_cols = [
                     "거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력",
                     "최근날짜", "최근단가", "출고횟수", "월평균_출고량", "월평균_매출",
-                    "총량_M2", "매출액", "가중평균단가"
+                    "총량_M2", "매출액", "담당자"
                 ]
                 ordered_cols = [c for c in ordered_cols if c in g.columns]
                 sc = [c for c in ["거래처", "품목코드"] if c in g.columns]
@@ -5183,7 +5240,7 @@ if active_main_tab == "👥 거래처별 검색":
                 clean_and_safe_display(
                     tab1_df,
                     pinned_cols=["거래처", "품목코드"],
-                    text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력", "최근날짜"],
+                    text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력", "최근날짜", "담당자"],
                     height=calc_table_height(tab1_df),
                     column_width_overrides={
                         "거래처": 170,
@@ -5200,7 +5257,7 @@ if active_main_tab == "👥 거래처별 검색":
                         "월평균_매출": 95,
                         "총량_M2": 80,
                         "매출액": 105,
-                        "가중평균단가": 95,
+                        "담당자": 95,
                     },
                 )
 
@@ -5633,6 +5690,10 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         direct_compare_days = 0
 
                         rule_default_df = build_default_quote_price_rules(default_date=default_rule_date, target_product_code=selected_quote_product)
+                        # 품목현황 시트의 품목명별 인상률을 기본값으로 적용 (아래 표에서 직접 수정 가능)
+                        _sheet_rate = item_rate_map.get(str(selected_quote_product).strip())
+                        if _sheet_rate is not None:
+                            rule_default_df["인상률(%)"] = float(_sheet_rate)
                         # 인상기준일을 datetime.date 객체로 변환 → DateColumn 캘린더 위젯 + YYYY/MM/DD 자동 서식화 지원
                         rule_default_display = rule_default_df.copy()
                         if "인상기준일" in rule_default_display.columns:
@@ -5850,15 +5911,24 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
 
                             reco_cols = [
                                 "추천순위", "적합도등급", "품목코드", "거래처", "거래처월평균매출", "월평균_매출", "월평균_출고량",
-                                "최근날짜", "단가인상기준일", "적용인상률(%)", "레퍼런스단가", "최근단가", "최근단가경과일", "비교판정", "단가판단", "견적추천점수",
+                                "최근날짜", "단가인상기준일", "적용인상률(%)", "레퍼런스단가", "최근단가", "담당자", "비교판정", "단가판단", "견적추천점수",
                                 "거래처규모적합도", "거래처규모우대점수", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "안정성점수", "인상반영내역", "추천사유"
                             ]
                             reco_cols = [c for c in reco_cols if c in reco_detail.columns]
                             reco_top = reco_detail.head(int(top_n_value)).copy()
+                            # 최근단가경과일 대신 담당자 표시 (해당 거래처·품목의 가장 최근 출고 담당자)
+                            _mgr_map_ref = build_latest_manager_map(q_quote_scope, on_cols=("품목코드", "거래처"))
+                            for _c in ("품목코드", "거래처"):
+                                reco_top[_c] = reco_top[_c].astype(str).str.strip()
+                            if not _mgr_map_ref.empty:
+                                reco_top = reco_top.drop(columns=["담당자"], errors="ignore").merge(_mgr_map_ref, on=["품목코드", "거래처"], how="left")
+                            else:
+                                reco_top["담당자"] = ""
+                            reco_top["담당자"] = reco_top["담당자"].fillna("")
                             clean_and_safe_display(
                                 reco_top[reco_cols],
                                 pinned_cols=["추천순위", "품목코드", "거래처"],
-                                text_cols=["적합도등급", "품목코드", "거래처", "최근날짜", "단가인상기준일", "비교판정", "단가판단", "인상반영내역", "추천사유"],
+                                text_cols=["적합도등급", "품목코드", "거래처", "최근날짜", "단가인상기준일", "담당자", "비교판정", "단가판단", "인상반영내역", "추천사유"],
                                 height=calc_table_height(reco_top, min_rows=5, max_rows=int(top_n_value)),
                                 column_width_overrides={
                                     "추천순위": 60,
@@ -5873,7 +5943,7 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                     "적용인상률(%)": 100,
                                     "레퍼런스단가": 95,
                                     "최근단가": 85,
-                                    "최근단가경과일": 95,
+                                    "담당자": 95,
                                     "비교판정": 125,
                                     "단가판단": 150,
                                     "견적추천점수": 95,
