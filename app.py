@@ -1986,8 +1986,13 @@ def build_item_increase_rate_map(item_status):
     """품목현황 시트의 품목명별 인상률(%) 맵을 반환합니다. 10% 표기(0.1)와 '10%' 문자열 모두 지원."""
     if item_status is None or item_status.empty or "품목명" not in item_status.columns or "인상률" not in item_status.columns:
         return {}
+    rows = item_status[["품목명", "인상률"]].copy()
+    if "품목코드" in item_status.columns:
+        rows = rows.assign(_code=item_status["품목코드"])
+    else:
+        rows = rows.assign(_code=None)
     out = {}
-    for _, r in item_status[["품목명", "인상률"]].iterrows():
+    for _, r in rows.iterrows():
         key = str(r["품목명"]).strip()
         if not key or key.lower() in ("nan", "none"):
             continue
@@ -2007,7 +2012,8 @@ def build_item_increase_rate_map(item_status):
             continue
         if 0.0 < abs(val) <= 1.5:  # 백분율 서식(0.1 = 10%) 자동 판별
             val = val * 100.0
-        out.setdefault(key, round(float(val), 2))
+        if key not in out:
+            out[key] = {"rate": round(float(val), 2), "code": ("" if pd.isna(r["_code"]) else str(r["_code"]).strip())}
     return out
 
 
@@ -5786,15 +5792,26 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
 
                         rule_default_df = build_default_quote_price_rules(default_date=default_rule_date, target_product_code=selected_quote_product)
                         # 품목현황 시트의 품목명별 인상률을 기본값으로 적용 (아래 표에서 직접 수정 가능)
-                        _sheet_rate = item_rate_map.get(str(selected_quote_product).strip())
-                        if _sheet_rate is None:
-                            _sel_norm = "".join(str(selected_quote_product).split())
+                        _sheet_rate = None
+                        _sheet_code = ""
+                        _sel_prod = str(selected_quote_product).strip()
+                        _hit = item_rate_map.get(_sel_prod)
+                        if _hit is None:
+                            _sel_norm = "".join(_sel_prod.split())
                             for _k, _v in item_rate_map.items():
                                 if "".join(_k.split()) == _sel_norm:
-                                    _sheet_rate = _v
+                                    _hit = _v
                                     break
-                        if _sheet_rate is not None:
-                            rule_default_df["인상률(%)"] = float(_sheet_rate)
+                        if _hit is None:
+                            _norm_sel = _sel_prod.replace(" ", "").upper()
+                            for _k, _v in item_rate_map.items():
+                                _nk = _k.replace(" ", "").upper()
+                                if _nk.startswith(_norm_sel) or _norm_sel.startswith(_nk):
+                                    _hit = _v
+                                    break
+                        if _hit is not None:
+                            _sheet_rate = _hit["rate"]
+                            _sheet_code = _hit.get("code", "")
                         # 인상기준일을 datetime.date 객체로 변환 → DateColumn 캘린더 위젯 + YYYY/MM/DD 자동 서식화 지원
                         rule_default_display = rule_default_df.copy()
                         if "인상기준일" in rule_default_display.columns:
@@ -5810,9 +5827,13 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         )
 
                         if _sheet_rate is not None:
-                            st.caption(f"✅ 품목현황 시트 기본 인상률: {_sheet_rate:,.2f}% — 아래 표에서 수정하면 수정한 값이 우선 적용됩니다.")
+                            _code_txt = f" (품목현황 코드: {_sheet_code})" if _sheet_code else ""
+                            st.caption(f"✅ 품목현황 시트 기본 인상률: {_sheet_rate:,.2f}%{_code_txt} — 아래 표에서 수정하면 수정한 값이 우선 적용됩니다.")
                         else:
-                            st.caption("ℹ️ 품목현황 시트에서 이 품목명의 인상률을 찾지 못해 기본값 0.00을 사용합니다. 시트의 품목명이 품목코드 표기와 일치하는지 확인하거나, 아래 표에 직접 입력해 주세요.")
+                            _sheet_codes = sorted({v.get("code", "") for v in item_rate_map.values() if v.get("code")})
+                            _near = [c for c in _sheet_codes if c and str(selected_quote_product).strip() and (c[:6] == str(selected_quote_product).strip()[:6])]
+                            _near_txt = f" 유사 코드 후보: {', '.join(_near[:5])}" if _near else ""
+                            st.caption(f"ℹ️ 품목현황 시트에서 이 품목명의 인상률을 찾지 못해 기본값 0.00을 사용합니다.{_near_txt} 시트의 품목명이 품목코드 표기와 일치하는지 확인하거나, 아래 표에 직접 입력해 주세요.")
                         price_rule_df = st.data_editor(
                             rule_default_display,
                             key=f"quote_ref_price_rule_editor_{selected_quote_product}_{'r%g' % _sheet_rate if _sheet_rate is not None else 'rnone'}",
