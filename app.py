@@ -1984,8 +1984,27 @@ def build_latest_manager_map(df, on_cols=("품목코드", "거래처"), manager_
 
 def build_item_increase_rate_map(item_status):
     """품목현황 시트의 품목명별 인상률(%) 맵을 반환합니다. 10% 표기(0.1)와 '10%' 문자열 모두 지원."""
-    if item_status is None or item_status.empty or "품목명" not in item_status.columns or "인상률" not in item_status.columns:
+    if item_status is None or item_status.empty:
         return {}
+    item_status = item_status.copy()
+    item_status.columns = [str(c).strip() for c in item_status.columns]
+    if "품목명" not in item_status.columns or "인상률" not in item_status.columns:
+        # 제목/빈 행 아래에 헤더가 있는 경우(예: 3행 헤더) 헤더 행을 자동 탐색
+        _hdr = None
+        for _i in range(min(30, len(item_status))):
+            _vals = [str(v).strip() for v in item_status.iloc[_i].tolist()]
+            if "품목명" in _vals and "인상률" in _vals:
+                _hdr = _i
+                break
+        if _hdr is None:
+            return {}
+        _new_cols, _seen = [], {}
+        for v in item_status.iloc[_hdr].tolist():
+            _n = str(v).strip() if pd.notna(v) else ""
+            _seen[_n] = _seen.get(_n, 0) + 1
+            _new_cols.append(_n if _seen[_n] == 1 else f"{_n}.{_seen[_n] - 1}")
+        item_status = item_status.iloc[_hdr + 1:].copy()
+        item_status.columns = _new_cols
     rows = item_status[["품목명", "인상률"]].copy()
     if "품목코드" in item_status.columns:
         rows = rows.assign(_code=item_status["품목코드"])
@@ -2015,6 +2034,40 @@ def build_item_increase_rate_map(item_status):
         if key not in out:
             out[key] = {"rate": round(float(val), 2), "code": ("" if pd.isna(r["_code"]) else str(r["_code"]).strip())}
     return out
+
+
+def lookup_item_increase_rate(product_code, rate_map):
+    """품목코드(=품목현황 품목명) 기준 인상률 조회. 정확 일치 → 공백 무시 일치. 없으면 None."""
+    if not rate_map:
+        return None
+    key = str(product_code or "").strip()
+    if not key:
+        return None
+    hit = rate_map.get(key)
+    if hit is None:
+        norm = "".join(key.split())
+        for k, v in rate_map.items():
+            if "".join(k.split()) == norm:
+                hit = v
+                break
+    return hit
+
+
+def build_sheet_rate_rules(product_codes, rate_map, default_date, exclude_codes=()):
+    """품목현황 인상률을 품목코드별 인상 규칙 행으로 변환 (대표/특수 레퍼런스 등 다품목 표 연동용)."""
+    base_date = pd.to_datetime(default_date, errors="coerce")
+    if pd.isna(base_date):
+        base_date = pd.Timestamp("2026-04-15")
+    excl = {str(c).strip() for c in exclude_codes if str(c).strip()}
+    rows = []
+    for code in sorted({str(c).strip() for c in product_codes if pd.notna(c) and str(c).strip()}):
+        if code in excl:
+            continue
+        hit = lookup_item_increase_rate(code, rate_map)
+        if hit is None:
+            continue
+        rows.append({"적용구분": "품목코드", "적용값": code, "인상기준일": base_date.date(), "인상률(%)": float(hit["rate"])})
+    return pd.DataFrame(rows, columns=["적용구분", "적용값", "인상기준일", "인상률(%)"])
 
 
 @st.cache_data(show_spinner=False, max_entries=CACHE_DATA_LARGE_MAX_ENTRIES)
@@ -5794,24 +5847,11 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         # 품목현황 시트의 품목명별 인상률을 기본값으로 적용 (아래 표에서 직접 수정 가능)
                         _sheet_rate = None
                         _sheet_code = ""
-                        _sel_prod = str(selected_quote_product).strip()
-                        _hit = item_rate_map.get(_sel_prod)
-                        if _hit is None:
-                            _sel_norm = "".join(_sel_prod.split())
-                            for _k, _v in item_rate_map.items():
-                                if "".join(_k.split()) == _sel_norm:
-                                    _hit = _v
-                                    break
-                        if _hit is None:
-                            _norm_sel = _sel_prod.replace(" ", "").upper()
-                            for _k, _v in item_rate_map.items():
-                                _nk = _k.replace(" ", "").upper()
-                                if _nk.startswith(_norm_sel) or _norm_sel.startswith(_nk):
-                                    _hit = _v
-                                    break
+                        _hit = lookup_item_increase_rate(selected_quote_product, item_rate_map)
                         if _hit is not None:
                             _sheet_rate = _hit["rate"]
                             _sheet_code = _hit.get("code", "")
+                            rule_default_df["인상률(%)"] = float(_sheet_rate)
                         # 인상기준일을 datetime.date 객체로 변환 → DateColumn 캘린더 위젯 + YYYY/MM/DD 자동 서식화 지원
                         rule_default_display = rule_default_df.copy()
                         if "인상기준일" in rule_default_display.columns:
@@ -6095,15 +6135,29 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
 
 
 
+                # 편집표 규칙(선택 품목, 사용자 수정값 우선) + 표에 나오는 다른 품목은 품목현황 인상률을 자동 연동
+                _ref_codes = []
+                for _ref_df in (rep_ref, special_ref):
+                    if _ref_df is not None and not _ref_df.empty and "품목코드" in _ref_df.columns:
+                        _ref_codes += _ref_df["품목코드"].dropna().astype(str).tolist()
+                _editor_codes = []
+                if price_rule_df is not None and not price_rule_df.empty and {"적용구분", "적용값"} <= set(price_rule_df.columns):
+                    _editor_codes = price_rule_df.loc[price_rule_df["적용구분"].astype(str).str.strip() == "품목코드", "적용값"].astype(str).str.strip().tolist()
+                _sheet_rules = build_sheet_rate_rules(_ref_codes, item_rate_map, default_rule_date, exclude_codes=_editor_codes)
+                if price_rule_df is not None and not price_rule_df.empty:
+                    ref_rule_df = pd.concat([price_rule_df, _sheet_rules], ignore_index=True) if not _sheet_rules.empty else price_rule_df
+                else:
+                    ref_rule_df = _sheet_rules if not _sheet_rules.empty else price_rule_df
+
                 adjusted_rep_ref = apply_quote_price_adjustments(
                     rep_ref,
-                    rules_df=price_rule_df,
+                    rules_df=ref_rule_df,
                     default_date=default_rule_date,
                     target_product_code=selected_quote_product,
                 ) if rep_ref is not None and not rep_ref.empty else rep_ref
                 adjusted_special_ref = apply_quote_price_adjustments(
                     special_ref,
-                    rules_df=price_rule_df,
+                    rules_df=ref_rule_df,
                     default_date=default_rule_date,
                     target_product_code=selected_quote_product,
                 ) if special_ref is not None and not special_ref.empty else special_ref
