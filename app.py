@@ -5582,6 +5582,33 @@ if active_main_tab == "🔎 품목 검색":
                             _ps_src = q[q["품목코드"].astype(str) == _ps_selected_code].copy()
                             _ps_cust_df = build_customer_history_table(_ps_src)
 
+                            # 견적 레퍼런스 탭과 동일 사양: 기본 인상기준일 2026-04-15 + 품목현황 시트 인상률,
+                            # 최근날짜가 기준일 이전이면 레퍼런스단가 = 최근단가 × (1 + 인상률)
+                            if not _ps_cust_df.empty and "최근날짜" in _ps_cust_df.columns and "최근단가" in _ps_cust_df.columns:
+                                _ps_rule_date = pd.Timestamp("2026-04-15")
+                                _ps_rule_df = build_default_quote_price_rules(default_date=_ps_rule_date, target_product_code=_ps_selected_code)
+                                _ps_rate_hit = lookup_item_increase_rate(_ps_selected_code, item_rate_map)
+                                if _ps_rate_hit is not None:
+                                    _ps_rule_df["인상률(%)"] = float(_ps_rate_hit["rate"])
+                                _ps_adj = apply_quote_price_adjustments(
+                                    _ps_cust_df,
+                                    rules_df=_ps_rule_df,
+                                    default_date=_ps_rule_date,
+                                    target_product_code=_ps_selected_code,
+                                )
+                                _ps_cust_df = _ps_cust_df.copy()
+                                for _c in ["단가인상기준일", "적용인상률(%)", "레퍼런스단가"]:
+                                    _ps_cust_df[_c] = _ps_adj[_c].values
+                                _ps_cols = list(_ps_cust_df.columns)
+                                _ps_new = ["단가인상기준일", "적용인상률(%)", "레퍼런스단가"]
+                                _ps_base = [c for c in _ps_cols if c not in _ps_new]
+                                _ps_pos = _ps_base.index("최근날짜") + 1
+                                _ps_cust_df = _ps_cust_df[_ps_base[:_ps_pos] + _ps_new + _ps_base[_ps_pos:]]
+                                if _ps_rate_hit is not None:
+                                    st.caption(f"💹 단가 인상 반영: 기준일 2026-04-15 · 품목현황 인상률 {float(_ps_rate_hit['rate']):,.2f}% — 최근날짜가 기준일 이전인 거래처만 레퍼런스단가에 반영됩니다. (견적 레퍼런스 탭과 동일 기준)")
+                                else:
+                                    st.caption("ℹ️ 품목현황 시트에서 이 품목의 인상률을 찾지 못해 적용인상률 0.00% (레퍼런스단가 = 최근단가)로 표시합니다.")
+
                             if _ps_cust_df.empty:
                                 st.info("선택한 품목이 현재 사이드바 필터(품목코드·점착제코드) 결과에 포함되지 않습니다. 사이드바 필터를 조정하거나 '초기화' 후 다시 시도해 주세요.")
                             else:
@@ -5595,7 +5622,7 @@ if active_main_tab == "🔎 품목 검색":
                                 _ps_cust_event = clean_and_safe_display(
                                     _ps_cust_df,
                                     pinned_cols=["거래처", "품목코드"],
-                                    text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력", "최근날짜", "담당자"],
+                                    text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력", "최근날짜", "단가인상기준일", "담당자"],
                                     height=calc_table_height(_ps_cust_df),
                                     column_width_overrides={
                                         "거래처": 170,
@@ -5606,6 +5633,9 @@ if active_main_tab == "🔎 품목 검색":
                                         "기준폭이력": 120,
                                         "가로폭이력": 260,
                                         "최근날짜": 95,
+                                        "단가인상기준일": 105,
+                                        "적용인상률(%)": 95,
+                                        "레퍼런스단가": 95,
                                         "최근단가": 70,
                                         "출고횟수": 70,
                                         "월평균_출고량": 95,
