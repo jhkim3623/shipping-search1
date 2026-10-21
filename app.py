@@ -530,10 +530,18 @@ def build_customer_history_table(q_input):
 
     g["가중평균단가"] = np.where(g["총량_M2"] > 0, (g["매출액"] / g["총량_M2"]).round(0), 0)
 
+    # 마지막 컬럼: 가중평균단가 대신 담당자 (그룹별 가장 최근 출고 담당자)
+    _mgr_map = build_latest_manager_map(q1, on_cols=tuple(key_cols))
+    if not _mgr_map.empty:
+        g = g.drop(columns=["담당자"], errors="ignore").merge(_mgr_map, on=key_cols, how="left")
+    else:
+        g["담당자"] = ""
+    g["담당자"] = g["담당자"].fillna("")
+
     ordered_cols = [
         "거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력",
         "최근날짜", "최근단가", "출고횟수", "월평균_출고량", "월평균_매출",
-        "총량_M2", "매출액", "가중평균단가"
+        "총량_M2", "매출액", "담당자"
     ]
     ordered_cols = [c for c in ordered_cols if c in g.columns]
     sc = [c for c in ["거래처", "품목코드"] if c in g.columns]
@@ -5525,10 +5533,10 @@ if active_main_tab == "🔎 품목 검색":
                                     _ps_period_txt = "적용된 필터 기간"
                                 st.caption(f"적용 기간: {_ps_period_txt} · 거래처 {_ps_n_cust}개 · {len(_ps_cust_df):,}행")
 
-                                clean_and_safe_display(
+                                _ps_cust_event = clean_and_safe_display(
                                     _ps_cust_df,
                                     pinned_cols=["거래처", "품목코드"],
-                                    text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력", "최근날짜"],
+                                    text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "기준폭이력", "가로폭이력", "최근날짜", "담당자"],
                                     height=calc_table_height(_ps_cust_df),
                                     column_width_overrides={
                                         "거래처": 170,
@@ -5545,9 +5553,96 @@ if active_main_tab == "🔎 품목 검색":
                                         "월평균_매출": 95,
                                         "총량_M2": 80,
                                         "매출액": 105,
-                                        "가중평균단가": 95,
+                                        "담당자": 95,
                                     },
+                                    selection_key="ps_cust_history_select",
                                 )
+                                st.caption("위 목록에서 거래처 행을 클릭하면 해당 거래처의 원자료(필터 적용됨과 동일한 구성)가 아래에 표시됩니다 — 탭 이동 없이 이력과 원자료를 한 화면에서 확인할 수 있습니다.")
+
+                                _ps_raw_rows = []
+                                if _ps_cust_event is not None:
+                                    try:
+                                        _ps_payload = _ps_cust_event["selection"]
+                                    except Exception:
+                                        _ps_payload = getattr(_ps_cust_event, "selection", None)
+                                    if _ps_payload is not None:
+                                        try:
+                                            _ps_raw_rows = list(_ps_payload["rows"])
+                                        except Exception:
+                                            try:
+                                                _ps_raw_rows = list(getattr(_ps_payload, "rows", []) or [])
+                                            except Exception:
+                                                _ps_raw_rows = []
+
+                                if not _ps_raw_rows:
+                                    st.info("위 '거래처별 출고 이력'에서 거래처 행을 클릭하면 해당 거래처·품목·점착제의 원자료 전체(날짜 최신순)가 여기에 표시됩니다.")
+                                else:
+                                    _ps_sel_row = _ps_cust_df.iloc[int(_ps_raw_rows[0])]
+                                    _ps_raw_matched = _ps_src.copy()
+                                    for _c in ["거래처", "품목코드", "점착제코드", "점착제명"]:
+                                        if _c in _ps_raw_matched.columns:
+                                            _left = _ps_raw_matched[_c].fillna("").astype(str).str.strip().replace({"nan": "", "None": "", "NaT": ""})
+                                            _rv = _ps_sel_row.get(_c)
+                                            _right = "" if pd.isna(_rv) else str(_rv).strip()
+                                            _ps_raw_matched = _ps_raw_matched[_left == _right]
+                                    st.markdown("#### 🗂️ 원자료 보기 — 선택 거래처 (필터 적용됨)")
+                                    if _ps_raw_matched.empty:
+                                        st.info("해당 조합의 원자료가 없습니다.")
+                                    else:
+                                        _ps_raw_priority_cols = [
+                                            "날짜", "거래처", "담당부서", "영업담당부서", "담당자", "재단구분",
+                                            "품목코드", "점착제코드", "점착제명", "기준폭", "가로폭(mm)", "길이(m)", "수량(M2)", "가로폭이력",
+                                            "단가(원/M2)", "금액(원)", "최근날짜", "최근단가", "비고"
+                                        ]
+                                        _ps_raw_cols = [c for c in _ps_raw_priority_cols if c in _ps_raw_matched.columns]
+                                        _ps_raw_cols += [c for c in _ps_raw_matched.columns if c not in _ps_raw_cols]
+                                        _ps_raw_display = _ps_raw_matched[_ps_raw_cols].copy()
+                                        if "날짜" in _ps_raw_display.columns:
+                                            _ps_raw_display = _ps_raw_display.sort_values("날짜", ascending=False)
+                                        _ps_raw_total = len(_ps_raw_display)
+                                        _ps_raw_qty = pd.to_numeric(_ps_raw_display["수량(M2)"], errors="coerce").sum() if "수량(M2)" in _ps_raw_display.columns else 0.0
+                                        _ps_raw_amt = pd.to_numeric(_ps_raw_display["금액(원)"], errors="coerce").sum() if "금액(원)" in _ps_raw_display.columns else 0.0
+                                        _ps_raw_cap = 5000
+                                        if _ps_raw_total > _ps_raw_cap:
+                                            st.caption(f"속도 최적화를 위해 상위 {_ps_raw_cap:,}행만 표시합니다 (원자료 탭과 동일 규칙). 전체 {_ps_raw_total:,}행은 CSV로 내려받을 수 있습니다.")
+                                        else:
+                                            st.caption(f"원자료 {_ps_raw_total:,}행 · 총수량 {_ps_raw_qty:,.1f}㎡ · 총금액 {int(round(_ps_raw_amt)):,}원")
+                                        st.download_button(
+                                            "📥 거래처 원자료 CSV 다운로드",
+                                            data=_ps_raw_display.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                                            file_name="품목검색_거래처원자료.csv",
+                                            mime="text/csv",
+                                            key="download_ps_cust_raw_csv",
+                                        )
+                                        if _ps_raw_total > _ps_raw_cap:
+                                            _ps_raw_display = _ps_raw_display.head(_ps_raw_cap)
+                                        clean_and_safe_display(
+                                            _ps_raw_display,
+                                            pinned_cols=["거래처", "품목코드"],
+                                            text_cols=["거래처", "품목코드", "점착제코드", "점착제명", "재단구분", "가로폭이력", "최근날짜", "월", "비고", "담당부서", "영업담당부서", "담당자"],
+                                            height=calc_table_height(_ps_raw_display, min_rows=3, max_rows=18),
+                                            column_width_overrides={
+                                                "날짜": 95,
+                                                "거래처": 120,
+                                                "담당부서": 110,
+                                                "영업담당부서": 120,
+                                                "담당자": 95,
+                                                "재단구분": 90,
+                                                "품목코드": 145,
+                                                "점착제코드": 95,
+                                                "점착제명": 120,
+                                                "기준폭": 90,
+                                                "가로폭(mm)": 90,
+                                                "길이(m)": 90,
+                                                "가로폭이력": 220,
+                                                "수량(M2)": 90,
+                                                "단가(원/M2)": 95,
+                                                "금액(원)": 95,
+                                                "최근날짜": 95,
+                                                "최근단가": 85,
+                                                "비고": 220,
+                                            },
+                                        )
 
 if active_main_tab == "🏷️ 견적 레퍼런스":
     if lazy_tabs_enabled and lazy_active_tab != "🏷️ 견적 레퍼런스":
@@ -5692,6 +5787,12 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                         rule_default_df = build_default_quote_price_rules(default_date=default_rule_date, target_product_code=selected_quote_product)
                         # 품목현황 시트의 품목명별 인상률을 기본값으로 적용 (아래 표에서 직접 수정 가능)
                         _sheet_rate = item_rate_map.get(str(selected_quote_product).strip())
+                        if _sheet_rate is None:
+                            _sel_norm = "".join(str(selected_quote_product).split())
+                            for _k, _v in item_rate_map.items():
+                                if "".join(_k.split()) == _sel_norm:
+                                    _sheet_rate = _v
+                                    break
                         if _sheet_rate is not None:
                             rule_default_df["인상률(%)"] = float(_sheet_rate)
                         # 인상기준일을 datetime.date 객체로 변환 → DateColumn 캘린더 위젯 + YYYY/MM/DD 자동 서식화 지원
@@ -5708,9 +5809,13 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                             max_rows=max(2, min(len(rule_default_display), 6))
                         )
 
+                        if _sheet_rate is not None:
+                            st.caption(f"✅ 품목현황 시트 기본 인상률: {_sheet_rate:,.2f}% — 아래 표에서 수정하면 수정한 값이 우선 적용됩니다.")
+                        else:
+                            st.caption("ℹ️ 품목현황 시트에서 이 품목명의 인상률을 찾지 못해 기본값 0.00을 사용합니다. 시트의 품목명이 품목코드 표기와 일치하는지 확인하거나, 아래 표에 직접 입력해 주세요.")
                         price_rule_df = st.data_editor(
                             rule_default_display,
-                            key=f"quote_ref_price_rule_editor_{selected_quote_product}",
+                            key=f"quote_ref_price_rule_editor_{selected_quote_product}_{'r%g' % _sheet_rate if _sheet_rate is not None else 'rnone'}",
                             use_container_width=True,
                             height=rule_editor_height,
                             hide_index=True,
@@ -5914,7 +6019,6 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                                 "최근날짜", "단가인상기준일", "적용인상률(%)", "레퍼런스단가", "최근단가", "담당자", "비교판정", "단가판단", "견적추천점수",
                                 "거래처규모적합도", "거래처규모우대점수", "예상품목매출적합도", "예상품목수량적합도", "최근성점수", "안정성점수", "인상반영내역", "추천사유"
                             ]
-                            reco_cols = [c for c in reco_cols if c in reco_detail.columns]
                             reco_top = reco_detail.head(int(top_n_value)).copy()
                             # 최근단가경과일 대신 담당자 표시 (해당 거래처·품목의 가장 최근 출고 담당자)
                             _mgr_map_ref = build_latest_manager_map(q_quote_scope, on_cols=("품목코드", "거래처"))
@@ -5925,6 +6029,7 @@ if active_main_tab == "🏷️ 견적 레퍼런스":
                             else:
                                 reco_top["담당자"] = ""
                             reco_top["담당자"] = reco_top["담당자"].fillna("")
+                            reco_cols = [c for c in reco_cols if c in reco_top.columns]
                             clean_and_safe_display(
                                 reco_top[reco_cols],
                                 pinned_cols=["추천순위", "품목코드", "거래처"],
