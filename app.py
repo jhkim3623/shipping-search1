@@ -1,7 +1,8 @@
 import html
 import os
-import zlib
-import gc
+import hashlib
+import importlib.util
+from zipfile import ZipFile
 import sys
 from io import BytesIO
 
@@ -1047,7 +1048,8 @@ def build_filter_pair_frame(df):
 @st.cache_data(show_spinner=False, max_entries=64)
 def build_option_view(options, query="", selected_values=(), limit=200):
     items = [str(v) for v in (options or []) if pd.notna(v)]
-    selected = [str(v) for v in (selected_values or []) if str(v) in set(items)]
+    item_set = set(items)
+    selected = [str(v) for v in (selected_values or []) if str(v) in item_set]
     q = str(query or "").strip().lower()
 
     if q:
@@ -2072,11 +2074,55 @@ def build_sheet_rate_rules(product_codes, rate_map, default_date, exclude_codes=
 
 @st.cache_data(show_spinner=False, max_entries=CACHE_DATA_LARGE_MAX_ENTRIES)
 def load_excel(file_bytes):
-    xls = pd.ExcelFile(BytesIO(file_bytes), engine="openpyxl")
+    # calamine is optional: existing deployments still work with openpyxl.
+    engine = "calamine" if (
+        importlib.util.find_spec("python_calamine") is not None
+        and tuple(int(v) for v in pd.__version__.split(".")[:2]) >= (2, 2)
+    ) else "openpyxl"
+    try:
+        xls = pd.ExcelFile(BytesIO(file_bytes), engine=engine)
+    except Exception:
+        if engine == "openpyxl":
+            raise
+        xls = pd.ExcelFile(BytesIO(file_bytes), engine="openpyxl")
+
+    cr_text_map = {}
+    if xls.engine == "calamine":
+        # Resolve escapes against original shared strings instead of rewriting
+        # legitimate carriage returns. Ambiguous representations use openpyxl.
+        from openpyxl.reader.strings import read_string_table
+        with ZipFile(BytesIO(file_bytes)) as archive:
+            if "xl/sharedStrings.xml" in archive.namelist():
+                with archive.open("xl/sharedStrings.xml") as strings:
+                    originals = read_string_table(strings)
+                ambiguous = False
+                for text in originals:
+                    if "\r" in text or "_x000D_" in text:
+                        decoded = text.replace("_x000D_", "\r")
+                        if decoded in cr_text_map and cr_text_map[decoded] != text:
+                            ambiguous = True
+                            break
+                        cr_text_map[decoded] = text
+                if ambiguous:
+                    xls.close()
+                    xls = pd.ExcelFile(BytesIO(file_bytes), engine="openpyxl")
+            else:
+                # Inline-string workbooks can contain escaped and literal CRs
+                # with the same decoded value. Preserve legacy parsing there.
+                xls.close()
+                xls = pd.ExcelFile(BytesIO(file_bytes), engine="openpyxl")
 
     def read_sheet(name, required=True):
         try:
-            return pd.read_excel(xls, name)
+            frame = pd.read_excel(xls, name)
+            if xls.engine == "calamine":
+                # Preserve the original workbook's representation, including real CRs.
+                for col in frame.select_dtypes(include=["object", "string"]).columns:
+                    has_cr = frame[col].map(lambda value: isinstance(value, str) and "\r" in value)
+                    if has_cr.any():
+                        frame.loc[has_cr, col] = frame.loc[has_cr, col].map(
+                            lambda value: cr_text_map.get(value, value))
+            return frame
         except Exception:
             if required:
                 st.error(f"필수 시트가 없습니다: {name}")
@@ -2091,6 +2137,7 @@ def load_excel(file_bytes):
     bom = read_sheet("BOM_제조원가", required=False)
     raw_cost = read_sheet("원자재_원가", required=False)
     item_status = read_sheet("품목현황", required=False)
+    xls.close()
 
     if rec.empty:
         st.error("출고기록 시트가 비어있습니다.")
@@ -2171,7 +2218,8 @@ def load_excel(file_bytes):
             if col not in rec.columns:
                 rec[col] = pd.NA
             if src in rec.columns:
-                rec[col] = rec[col].fillna(exact_or_contains_map(rec[src], alias, typ))
+                missing = rec[col].isna()
+                rec.loc[missing, col] = exact_or_contains_map(rec.loc[missing, src], alias, typ)
 
     for c in ["품목코드", "점착제코드"]:
         normalize(rec, c)
@@ -2776,7 +2824,8 @@ def build_analysis_cache(q, selected_end_date=None, cutoff_day=20):
     return df, monthly_sales, customer_total_monthly, product_monthly, all_months
 
 
-def build_priority_results(monthly_sales, detail_df, all_months):
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
+def build_priority_results(monthly_sales, detail_df, all_months, source_signature=""):
     if len(all_months) < 2:
         return pd.DataFrame(), [], []
 
@@ -2834,10 +2883,11 @@ def build_priority_results(monthly_sales, detail_df, all_months):
                 "평균단가변화율(%)": float(change_pct),
             }
 
+    detail_groups = detail.groupby("거래처", observed=True, sort=False).indices
     rows = []
-    for cust_name in monthly_sales["거래처"].dropna().unique():
-        cust_monthly = monthly_sales[monthly_sales["거래처"] == cust_name].sort_values("월").copy()
-        cust_detail = detail[detail["거래처"] == cust_name].copy()
+    for cust_name, monthly_group in monthly_sales.groupby("거래처", observed=True, sort=False):
+        cust_monthly = monthly_group.sort_values("월").copy()
+        cust_detail = detail.iloc[detail_groups.get(cust_name, [])].copy()
 
         first_data = cust_monthly[cust_monthly["월"].isin(first_half)]["금액(원)"]
         last_data = cust_monthly[cust_monthly["월"].isin(last_half)]["금액(원)"]
@@ -2933,7 +2983,8 @@ def build_priority_results(monthly_sales, detail_df, all_months):
     result_df["순위"] = range(1, len(result_df) + 1)
     return result_df, first_half, last_half
 
-def build_growth_priority_results(monthly_sales, detail_df, all_months, selected_end_month=None, selected_end_date=None):
+@st.cache_data(show_spinner=False, max_entries=CACHE_DATA_MEDIUM_MAX_ENTRIES)
+def build_growth_priority_results(monthly_sales, detail_df, all_months, selected_end_month=None, selected_end_date=None, source_signature=""):
     if len(all_months) < 2:
         return pd.DataFrame(), [], []
 
@@ -2958,10 +3009,11 @@ def build_growth_priority_results(monthly_sales, detail_df, all_months, selected
             latest_dt = selected_end_ts
             month_progress_ratio = 1.0
 
+    detail_groups = detail_df.groupby("거래처", observed=True, sort=False).indices
     rows = []
-    for cust_name in monthly_sales["거래처"].dropna().unique():
-        cust_monthly = monthly_sales[monthly_sales["거래처"] == cust_name].sort_values("월").copy()
-        cust_detail = detail_df[detail_df["거래처"] == cust_name].copy()
+    for cust_name, monthly_group in monthly_sales.groupby("거래처", observed=True, sort=False):
+        cust_monthly = monthly_group.sort_values("월").copy()
+        cust_detail = detail_df.iloc[detail_groups.get(cust_name, [])].copy()
 
         first_data = cust_monthly[cust_monthly["월"].isin(first_half)]["금액(원)"]
         last_data = cust_monthly[cust_monthly["월"].isin(last_half)]["금액(원)"]
@@ -4885,30 +4937,97 @@ def build_customer_integrated_analysis(q, selected_customers_tuple, selected_end
 
 DEFAULT_FILE = "data.xlsx"
 
+
+def get_session_dataset(uploaded, path):
+    """Keep one private dataset per session; never share mutable frames across users."""
+    if uploaded is not None:
+        # Streamlit gives each uploaded file an ID; replacing even same-named files invalidates it.
+        upload_id = getattr(uploaded, "file_id", None)
+        raw = None if upload_id is not None else uploaded.getvalue()
+        source_key = ("upload", upload_id, uploaded.name, uploaded.size,
+                      None if raw is None else hashlib.sha256(raw).hexdigest())
+    else:
+        stat = os.stat(path)
+        source_key = ("local", os.path.realpath(path), stat.st_size,
+                      stat.st_mtime_ns, stat.st_ctime_ns)
+        raw = None
+    source_key = ("loader-v2",) + source_key
+    cached = st.session_state.get("_perf_dataset")
+    if cached is None or cached["source_key"] != source_key:
+        if raw is None:
+            if uploaded is not None:
+                raw = uploaded.getvalue()
+            else:
+                with open(path, "rb") as source:
+                    raw = source.read()
+                after = os.stat(path)
+                if (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise RuntimeError("데이터 파일이 읽는 중 변경되었습니다. 잠시 후 새로고침해 주세요.")
+        signature = hashlib.sha256(raw).hexdigest()
+        with st.spinner("데이터를 처음 준비하고 있습니다. 이후 검색에는 준비된 데이터를 재사용합니다."):
+            frames = load_excel(raw)
+            cached = {"source_key": source_key, "signature": signature,
+                      "frames": frames, "cost_lookup": build_cost_lookup(frames[5], frames[6]),
+                      "item_rate_map": build_item_increase_rate_map(frames[7])}
+        for key in ("_perf_option_scope", "_perf_applied_scope"):
+            st.session_state.pop(key, None)
+        st.session_state["_perf_dataset"] = cached
+    return cached
+
+
+def get_option_pairs(rec, signature, dept_col, manager_col, departments, managers,
+                     customers, start, end):
+    key = (signature, dept_col, manager_col, tuple(departments), tuple(managers),
+           tuple(customers), start, end)
+    cached = st.session_state.get("_perf_option_scope")
+    if cached is None or cached[0] != key:
+        cols = list(dict.fromkeys(c for c in ["날짜", dept_col, manager_col, "거래처",
+                                             "품목코드", "점착제코드"] if c in rec.columns))
+        scope = apply_filters(rec[cols], dept_col=dept_col, manager_col=manager_col,
+                              sel_dept=departments, sel_manager=managers, sel_cust=customers,
+                              start_ts=start, end_ts=end)
+        cached = (key, build_filter_pair_frame(scope))
+        st.session_state["_perf_option_scope"] = cached
+    return cached[1]
+
+
+def get_applied_scopes(rec, signature, dept_col, manager_col, departments, managers,
+                       customers, products, adhesives, start, end):
+    key = (signature, dept_col, manager_col, tuple(departments), tuple(managers),
+           tuple(customers), tuple(products), tuple(adhesives), start, end)
+    cached = st.session_state.get("_perf_applied_scope")
+    if cached is None or cached[0] != key:
+        scope = apply_filters(rec, dept_col=dept_col, manager_col=manager_col,
+                              sel_dept=departments, sel_manager=managers, sel_cust=customers,
+                              start_ts=start, end_ts=end)
+        # Independent frame objects preserve caller isolation without copying column buffers.
+        result = (apply_filters(scope, sel_prod=products, sel_adh=adhesives)
+                  if products or adhesives else scope.copy(deep=False))
+        cached = (key, scope, result)
+        st.session_state["_perf_applied_scope"] = cached
+    # Shallow copies use pandas copy-on-write; cached frames must remain untouched.
+    return cached[1].copy(deep=False), cached[2].copy(deep=False)
+
 st.markdown('<div class="app-main-title">출고 이력 검색(거래처/품목/가로폭/점착제)</div>', unsafe_allow_html=True)
 
 uploaded = st.session_state.get("sidebar_data_uploader")
 
-if uploaded:
-    file_bytes = uploaded.getvalue()
-elif os.path.exists(DEFAULT_FILE):
-    with open(DEFAULT_FILE, "rb") as f:
-        file_bytes = f.read()
-else:
+if uploaded is None and not os.path.exists(DEFAULT_FILE):
     st.error("기본 데이터 파일(data.xlsx)을 찾을 수 없습니다. 사이드바에서 파일을 업로드해 주세요.")
     st.stop()
 
-rec, alias, prod, adh, cust, bom, raw_cost, item_status = load_excel(file_bytes)
-cost_lookup = build_cost_lookup(bom, raw_cost)
-item_rate_map = build_item_increase_rate_map(item_status)
-gc.collect()  # [최적화] 엑셀 파싱/머지 직후 임시 객체 즉시 회수
+dataset = get_session_dataset(uploaded, DEFAULT_FILE)
+rec, alias, prod, adh, cust, bom, raw_cost, item_status = dataset["frames"]
+cost_lookup = dataset["cost_lookup"]
+item_rate_map = dataset["item_rate_map"]
 
 st.sidebar.markdown('<div class="sidebar-filter-title">검색 필터</div>', unsafe_allow_html=True)
 
 dept_col = "담당부서" if "담당부서" in rec.columns else ("영업담당부서" if "영업담당부서" in rec.columns else None)
 manager_col = "담당자" if "담당자" in rec.columns else None
 
-filter_source_signature = f"{len(file_bytes)}-{zlib.crc32(file_bytes[:1048576]) & 0xffffffff}"
+filter_source_signature = dataset["signature"]
 filter_meta_cache_key = f"{filter_source_signature}|{dept_col}|{manager_col}"
 if st.session_state.get("_filter_meta_cache_key") != filter_meta_cache_key:
     st.session_state["_filter_meta_cache_key"] = filter_meta_cache_key
@@ -4917,14 +5036,12 @@ if st.session_state.get("_filter_meta_cache_key") != filter_meta_cache_key:
         dept_col=dept_col,
         manager_col=manager_col,
     )
-    st.session_state["_filter_pair_cache_value"] = build_filter_pair_frame(rec)
 
 dept_options, manager_options, cust_options, prod_options, adh_options, date_min, date_max = st.session_state.get(
     "_filter_meta_cache_value",
     ([], [], [], [], [], None, None),
 )
 default_start_date = get_default_filter_start_date(date_min, date_max)
-filter_pair_df = st.session_state.get("_filter_pair_cache_value", pd.DataFrame(columns=["거래처", "품목코드", "점착제코드"]))
 
 if st.session_state.get("_filter_loaded_signature") != filter_source_signature:
     reset_filter_state_defaults(date_min=date_min, date_max=date_max, reset_applied=True)
@@ -4990,19 +5107,11 @@ widget_end_ts_for_options = pd.to_datetime(widget_end_date_for_options) if widge
 if widget_end_ts_for_options is not None:
     widget_end_ts_for_options = widget_end_ts_for_options + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
 
-option_scope_df = apply_filters(
-    rec,
-    dept_col=dept_col,
-    manager_col=manager_col,
-    sel_dept=widget_sel_dept_for_options,
-    sel_manager=widget_sel_manager_for_options,
-    sel_cust=widget_sel_cust_for_options,
-    sel_prod=None,
-    sel_adh=None,
-    start_ts=widget_start_ts_for_options,
-    end_ts=widget_end_ts_for_options,
+option_pair_df = get_option_pairs(
+    rec, filter_source_signature, dept_col, manager_col,
+    widget_sel_dept_for_options, widget_sel_manager_for_options,
+    widget_sel_cust_for_options, widget_start_ts_for_options, widget_end_ts_for_options,
 )
-option_pair_df = build_filter_pair_frame(option_scope_df)
 
 cross_prod_options, cross_adh_options = build_cross_filtered_option_sets(
     option_pair_df,
@@ -5196,21 +5305,9 @@ filters_ready = bool(st.session_state.get("flt_has_applied", False))
 filter_wait_message = "검색 필터를 설정한 뒤 '필터 적용'을 눌러 주세요. 초기화 후에는 이전 결과를 유지하고, 다시 적용할 때만 새 결과를 계산합니다."
 
 if filters_ready:
-    q_quote_scope = apply_filters(
-        rec,
-        dept_col=dept_col,
-        manager_col=manager_col,
-        sel_dept=sel_dept,
-        sel_manager=sel_manager,
-        sel_cust=sel_cust,
-        start_ts=start_ts,
-        end_ts=end_ts,
-    )
-
-    q = apply_filters(
-        q_quote_scope,
-        sel_prod=sel_prod,
-        sel_adh=sel_adh,
+    q_quote_scope, q = get_applied_scopes(
+        rec, filter_source_signature, dept_col, manager_col,
+        sel_dept, sel_manager, sel_cust, sel_prod, sel_adh, start_ts, end_ts,
     )
     st.sidebar.caption(f"현재 필터 결과: {len(q):,}건")
 else:
@@ -7784,7 +7881,8 @@ if active_main_tab == "📉 매출 하락 분석":
                 st.warning("분석에 필요한 데이터가 부족합니다.")
             else:
                 detail_df, monthly_sales, customer_total_monthly_all, product_monthly_all, all_months = build_analysis_cache(q, selected_end_date=edate, cutoff_day=20)
-                priority_df, first_half, last_half = build_priority_results(monthly_sales, detail_df, all_months)
+                priority_df, first_half, last_half = build_priority_results(
+                    monthly_sales, detail_df, all_months, source_signature=filter_source_signature)
 
                 if len(all_months) < 2:
                     st.info("분석 기간이 너무 짧습니다. (최소 2개월 필요)")
@@ -8178,7 +8276,8 @@ if active_main_tab == "📈 매출 상승 분석":
                 priority_df, first_half, last_half = build_growth_priority_results(
                     monthly_sales, detail_df, all_months,
                     selected_end_month=selected_end_month,
-                    selected_end_date=edate
+                    selected_end_date=edate,
+                    source_signature=filter_source_signature
                 )
 
                 if len(all_months) < 2:
